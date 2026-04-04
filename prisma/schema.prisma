@@ -1,0 +1,163 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+model User {
+  id              String                      @id @default(uuid())
+  mobile          String                      @unique
+  role            Role                        @default(CUSTOMER)
+  passwordHash    String?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+  addresses       Address[]
+  profile         Profile?
+  cancellations   RequestCancellationReason[] @relation("CustomerCancellations")
+  spCancellations RequestCancellationReason[] @relation("SPCancellations")
+  spProfile       ServiceProviderProfile?
+  requests        ServiceRequest[]            @relation("CustomerRequests")
+  spRequests      ServiceRequest[]            @relation("SPRequests")
+}
+
+model Profile {
+  id                String  @id @default(uuid())
+  userId            String  @unique
+  fullName          String?
+  profilePictureUrl String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ServiceProviderProfile {
+  id              String  @id @default(uuid())
+  userId          String  @unique
+  aadharNumber    String?
+  aadharCardUrl   String?
+  address         String?
+  bio             String?
+  categoryName    String?
+  subCategoryName String?
+  isVerified      Boolean @default(false)
+  latitude        Float?
+  longitude       Float?
+  user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Address {
+  id          String                   @id @default(uuid())
+  customerId  String
+  label       String
+  addressLine String
+  city        String
+  pincode     String
+  coordinates Unsupported("geography")
+  isDefault   Boolean                  @default(false)
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+  customer    User                     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  requests    ServiceRequest[]
+
+  @@index([coordinates], map: "address_coordinates_idx", type: Gist)
+}
+
+model ServiceCategory {
+  id            String               @id @default(uuid())
+  name          String               @unique
+  iconUrl       String?
+  requests      ServiceRequest[]
+  subCategories ServiceSubcategory[]
+}
+
+model ServiceSubcategory {
+  id         String           @id @default(uuid())
+  name       String
+  iconUrl    String?
+  categoryId String
+  requests   ServiceRequest[]
+  category   ServiceCategory  @relation(fields: [categoryId], references: [id])
+}
+
+model ServiceRequest {
+  id              String                     @id @default(uuid())
+  customerId      String
+  spId            String?
+  categoryId      String
+  subCategoryId   String?
+  locationId      String
+  status          RequestStatus              @default(PENDING)
+  audioMessageUrl String?
+  messageText     String?
+  startOtp        String?
+  completionOtp   String?
+  scheduledAt     DateTime?
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+  feedback        Feedback?
+  cancellation    RequestCancellationReason?
+  category        ServiceCategory            @relation(fields: [categoryId], references: [id])
+  customer        User                       @relation("CustomerRequests", fields: [customerId], references: [id])
+  location        Address                    @relation(fields: [locationId], references: [id])
+  sp              User?                      @relation("SPRequests", fields: [spId], references: [id])
+  subCategory     ServiceSubcategory?        @relation(fields: [subCategoryId], references: [id])
+}
+
+model Feedback {
+  id               String         @id @default(uuid())
+  requestId        String         @unique
+  rating           Int
+  comment          String?
+  audioFeedbackUrl String?
+  createdAt        DateTime       @default(now())
+  request          ServiceRequest @relation(fields: [requestId], references: [id])
+}
+
+model RequestCancellationReason {
+  id         String         @id @default(uuid())
+  requestId  String         @unique
+  spId       String?
+  customerId String?
+  reason     String
+  createdAt  DateTime       @default(now())
+  customer   User?          @relation("CustomerCancellations", fields: [customerId], references: [id])
+  request    ServiceRequest @relation(fields: [requestId], references: [id])
+  sp         User?          @relation("SPCancellations", fields: [spId], references: [id])
+}
+
+model OtpRecord {
+  id        String   @id @default(uuid())
+  mobile    String
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model spatial_ref_sys {
+  srid      Int     @id
+  auth_name String? @db.VarChar(256)
+  auth_srid Int?
+  srtext    String? @db.VarChar(2048)
+  proj4text String? @db.VarChar(2048)
+}
+
+enum Role {
+  CUSTOMER
+  SP
+  ADMIN
+}
+
+enum RequestStatus {
+  PENDING
+  ACCEPTED
+  TEMP_WORK_STARTED
+  WORK_STARTED
+  TEMP_COMPLETED
+  COMPLETED
+  CANCELLED
+}
