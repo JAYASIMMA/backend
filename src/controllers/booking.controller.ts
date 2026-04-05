@@ -141,10 +141,13 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}`);
       } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
         // This is the stage where the worker arrives and asks for the START PIN
+        // FALLBACK: Generate startOtp if missing
+        const startOtp = booking.startOtp || Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.serviceRequest.update({
           where: { id },
-          data: { status },
+          data: { status, startOtp },
         });
+        console.log(`[BOOKING] Mission ${id} worker arrived. Start OTP: ${startOtp}`);
       } else if (status === 'WORK_STARTED' && booking.status === 'TEMP_WORK_STARTED') {
         // Actual work start happens ONLY with correct OTP
         if (otp !== booking.startOtp) {
@@ -156,7 +159,8 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         });
       } else if (status === 'TEMP_COMPLETED' && (booking.status === 'WORK_STARTED' || booking.status === 'TEMP_WORK_STARTED')) {
         // When worker finishes, generate a 4-digit completionOtp
-        const completionOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        // FALLBACK: Always ensure a completionOtp exists
+        const completionOtp = booking.completionOtp || Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.serviceRequest.update({
           where: { id },
           data: { status, completionOtp },
@@ -174,7 +178,17 @@ export const updateBookingStatus = async (req: any, res: Response) => {
       }
     }
 
-    res.status(200).json({ success: true, message: 'Status updated' });
+    const updatedBooking = await prisma.serviceRequest.findUnique({
+      where: { id },
+      include: {
+        category: true,
+        location: true,
+        customer: { include: { profile: true } },
+        sp: { include: { profile: true } }
+      }
+    });
+
+    res.status(200).json({ success: true, message: 'Status updated', data: updatedBooking });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
