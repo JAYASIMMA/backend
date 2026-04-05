@@ -41,6 +41,8 @@ router.post('/profile/picture', authenticate, upload.single('profilePicture'), p
 router.post('/customer/setup-profile', authenticate, authorize(['CUSTOMER']), upload.single('profilePicture'), customerController.setupProfile);
 
 // SP Routes
+router.get('/sp/stats', authenticate, authorize(['SP']), spController.getDashboardStats);
+router.get('/sp/history', authenticate, authorize(['SP']), spController.getServiceHistory);
 router.get('/sp/broadcasts', authenticate, authorize(['SP']), spController.getBroadcasts);
 
 // Auth Routes
@@ -60,6 +62,7 @@ router.get('/admin/sps', authenticate, authorize(['ADMIN']), adminController.get
 router.get('/admin/requests', authenticate, authorize(['ADMIN']), adminController.getAllRequests);
 router.get('/admin/audits', authenticate, authorize(['ADMIN']), adminController.getAudits);
 router.post('/admin/sps', authenticate, authorize(['ADMIN']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'aadharCard', maxCount: 1 }]), adminController.createSP);
+router.patch('/admin/sps/:id', authenticate, authorize(['ADMIN']), adminController.updateSPAccount);
 router.patch('/admin/sps/:id/verify', authenticate, authorize(['ADMIN']), adminController.toggleSPVerification);
 router.delete('/admin/sps/:id', authenticate, authorize(['ADMIN']), adminController.deletePartner);
 

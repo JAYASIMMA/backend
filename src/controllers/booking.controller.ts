@@ -1,8 +1,24 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { uploadFile } from '../services/s3.service';
+import { uploadFile, getPresignedUrl } from '../services/s3.service';
 
 const prisma = new PrismaClient();
+
+// Helper to handle legacy full URLs and generate signed URLs for both images and audio
+const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
+  if (!url) return null;
+  // If it's already a full URL (legacy), extract the key
+  let key = url;
+  if (url.includes('.amazonaws.com/')) {
+    key = url.split('.amazonaws.com/')[1];
+  }
+  try {
+    return await getPresignedUrl(key, 3600); // 1 hour expiry
+  } catch (err) {
+    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
+    return null;
+  }
+};
 
 export const createBooking = async (req: any, res: Response) => {
   let { categoryId, subCategoryId, locationId, messageText, audioMessageUrl, scheduledAt } = req.body;
@@ -13,11 +29,7 @@ export const createBooking = async (req: any, res: Response) => {
   }
 
   console.log(`[CREATE BOOKING] Initiated by user: ${req.userId} for category: ${categoryId}`);
-  console.log(`[CREATE BOOKING] req.file present: ${!!req.file}`);
-  if (req.file) {
-     console.log(`[CREATE BOOKING] File details: name=${req.file.originalname}, size=${req.file.size}, type=${req.file.mimetype}`);
-  }
-
+  
   try {
     // If a file is uploaded (voice instruction), send it to S3
     if (req.file) {
@@ -27,7 +39,6 @@ export const createBooking = async (req: any, res: Response) => {
         console.log(`[CREATE BOOKING] Audio S3 URL: ${audioMessageUrl}`);
       } catch (uploadErr: any) {
         console.error('[CREATE BOOKING] S3 Upload Error:', uploadErr.message);
-        // We continue with null URL if upload fails, or we can throw
       }
     }
 
@@ -45,7 +56,14 @@ export const createBooking = async (req: any, res: Response) => {
     });
 
     console.log(`[CREATE BOOKING] Successfully created booking ID: ${booking.id}`);
-    res.status(201).json({ success: true, data: booking });
+    
+    // Sign the URL for the response
+    const responseData = {
+      ...booking,
+      audioMessageUrl: await getSignedAssetUrl(booking.audioMessageUrl)
+    };
+
+    res.status(201).json({ success: true, data: responseData });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -65,11 +83,29 @@ export const getActiveBookings = async (req: any, res: Response) => {
       include: {
         category: true,
         location: true,
+        sp: {
+          include: { profile: true }
+        }
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    res.status(200).json({ success: true, data: bookings });
+    // Process URLs for each booking
+    const processedBookings = await Promise.all(bookings.map(async (b: any) => {
+      return {
+        ...b,
+        audioMessageUrl: await getSignedAssetUrl(b.audioMessageUrl),
+        sp: b.sp ? {
+          ...b.sp,
+          profile: b.sp.profile ? {
+            ...b.sp.profile,
+            profilePictureUrl: await getSignedAssetUrl(b.sp.profile.profilePictureUrl)
+          } : null
+        } : null
+      };
+    }));
+
+    res.status(200).json({ success: true, data: processedBookings });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -93,43 +129,40 @@ export const updateBookingStatus = async (req: any, res: Response) => {
     // Role-based status transitions
     if (req.role === 'SP') {
       if (status === 'ACCEPTED' && booking.status === 'PENDING') {
-        await prisma.serviceRequest.update({
-          where: { id },
-          data: { status, spId: req.userId },
-        });
-      } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
-        // Generate Start OTP for customer to give to SP
+        // When SP accepts, generate a 4-digit numeric startOtp
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.serviceRequest.update({
           where: { id },
-          data: { status, startOtp },
+          data: { status, spId: req.userId, startOtp },
         });
-        
-        // (Twilio functionality removed - refer to console for OTP)
-        
-        console.log(`[START OTP] ${startOtp}`);
+        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}`);
+      } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
+        // This is the stage where the worker arrives and asks for the START PIN
+        await prisma.serviceRequest.update({
+          where: { id },
+          data: { status },
+        });
       } else if (status === 'WORK_STARTED' && booking.status === 'TEMP_WORK_STARTED') {
+        // Actual work start happens ONLY with correct OTP
         if (otp !== booking.startOtp) {
-          return res.status(400).json({ success: false, message: 'Invalid OTP' });
+          return res.status(400).json({ success: false, message: 'Invalid start matching PIN' });
         }
         await prisma.serviceRequest.update({
           where: { id },
           data: { status },
         });
-      } else if (status === 'TEMP_COMPLETED' && booking.status === 'WORK_STARTED') {
-        // Generate Completion OTP
+      } else if (status === 'TEMP_COMPLETED' && (booking.status === 'WORK_STARTED' || booking.status === 'TEMP_WORK_STARTED')) {
+        // When worker finishes, generate a 4-digit completionOtp
         const completionOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.serviceRequest.update({
           where: { id },
           data: { status, completionOtp },
         });
-
-        // (Twilio functionality removed - refer to console for OTP)
-
-        console.log(`[COMPLETION OTP] ${completionOtp}`);
+        console.log(`[BOOKING] Mission ${id} marked for completion. Completion OTP: ${completionOtp}`);
       } else if (status === 'COMPLETED' && booking.status === 'TEMP_COMPLETED') {
+        // Final completion happens ONLY with correct PIN
         if (otp !== booking.completionOtp) {
-          return res.status(400).json({ success: false, message: 'Invalid OTP' });
+          return res.status(400).json({ success: false, message: 'Invalid completion matching PIN' });
         }
         await prisma.serviceRequest.update({
           where: { id },
@@ -162,16 +195,10 @@ export const cancelBooking = async (req: any, res: Response) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    // Only allow customer or assigned SP to cancel
     if (booking.customerId !== req.userId && booking.spId !== req.userId) {
-      return res.status(403).json({ success: false, message: 'Forbidden: You are not authorized to cancel this booking' });
+      return res.status(403).json({ success: false, message: 'Forbidden' });
     }
 
-    if (booking.status === 'COMPLETED') {
-      return res.status(400).json({ success: false, message: 'Cannot cancel a completed booking' });
-    }
-
-    // Perform as a transaction
     await prisma.$transaction([
       prisma.serviceRequest.update({
         where: { id },
@@ -187,16 +214,13 @@ export const cancelBooking = async (req: any, res: Response) => {
       }),
     ]);
 
-    res.status(200).json({ success: true, message: 'Booking cancelled successfully' });
+    res.status(200).json({ success: true, message: 'Booking cancelled' });
   } catch (error) {
-    console.error('Cancellation Error:', error);
+    console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
-/**
- * Get Job History (Completed or Cancelled)
- */
 export const getBookingHistory = async (req: any, res: Response) => {
   try {
     const bookings = await prisma.serviceRequest.findMany({
@@ -219,9 +243,23 @@ export const getBookingHistory = async (req: any, res: Response) => {
       orderBy: { updatedAt: 'desc' },
     });
 
-    res.status(200).json({ success: true, data: bookings });
+    const processedHistory = await Promise.all(bookings.map(async (b: any) => {
+      return {
+        ...b,
+        audioMessageUrl: await getSignedAssetUrl(b.audioMessageUrl),
+        sp: b.sp ? {
+          ...b.sp,
+          profile: b.sp.profile ? {
+            ...b.sp.profile,
+            profilePictureUrl: await getSignedAssetUrl(b.sp.profile.profilePictureUrl)
+          } : null
+        } : null
+      };
+    }));
+
+    res.status(200).json({ success: true, data: processedHistory });
   } catch (error) {
-    console.error('History Error:', error);
+    console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };

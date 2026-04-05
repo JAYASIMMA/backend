@@ -300,3 +300,70 @@ export const updateAdminProfile = async (req: any, res: Response) => {
     res.status(500).json({ success: false, message: 'Failed to update settings' });
   }
 };
+
+// Update SP Account (Mobile, Password, etc)
+export const updateSPAccount = async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { mobile, password, fullName, bio, isVerified } = req.body;
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const userData: any = {};
+        
+        // If mobile is changing, we should check if another user is using it.
+        if (mobile) {
+            const existingUser = await prisma.user.findUnique({ where: { mobile } });
+            if (existingUser && existingUser.id !== id) {
+                return res.status(400).json({ success: false, message: 'This mobile number is already assigned to another user.' });
+            }
+            userData.mobile = mobile;
+        }
+
+        if (password) {
+            userData.passwordHash = await bcrypt.hash(password, 10);
+        }
+
+        // 1. Update Core User (Mobile/Password)
+        if (Object.keys(userData).length > 0) {
+            await prisma.user.update({
+                where: { id },
+                data: userData
+            });
+        }
+
+        // 2. Update Profile Name
+        if (fullName) {
+            await prisma.profile.upsert({
+                where: { userId: id },
+                update: { fullName },
+                create: { userId: id, fullName, profilePictureUrl: "" }
+            });
+        }
+
+        // 3. Update SP specific profile fields
+        if (bio !== undefined || isVerified !== undefined) {
+            await prisma.serviceProviderProfile.upsert({
+                where: { userId: id },
+                update: { 
+                    ...(bio !== undefined && { bio }),
+                    ...(isVerified !== undefined && { isVerified })
+                },
+                create: { 
+                    userId: id, 
+                    bio: bio || "", 
+                    isVerified: !!isVerified,
+                    aadharNumber: "0", 
+                    address: "N/A", 
+                    aadharCardUrl: "", 
+                    categoryName: "N/A", 
+                    subCategoryName: "N/A" 
+                }
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Merchant account updated successfully' });
+    } catch (error) {
+        console.error('Update SP Account Error:', error);
+        res.status(500).json({ success: false, message: 'Update failed' });
+    }
+};

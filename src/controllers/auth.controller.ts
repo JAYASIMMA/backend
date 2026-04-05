@@ -76,7 +76,10 @@ export const customerDirectLogin = async (req: Request, res: Response) => {
   }
 
   try {
-    const mobileStr = mobile.toString();
+    let mobileStr = mobile.toString().trim();
+    if (mobileStr.length === 10 && !mobileStr.startsWith('+')) {
+      mobileStr = `+91${mobileStr}`;
+    }
 
     // Find or create customer
     let user = await prisma.user.findUnique({
@@ -127,7 +130,13 @@ export const loginPassword = async (req: Request, res: Response) => {
   }
 
   try {
-    const mobileStr = mobile.toString();
+    let mobileStr = mobile.toString().trim();
+    
+    // Normalize: If 10 digits, assume +91 prefix for India
+    if (mobileStr.length === 10 && !mobileStr.startsWith('+')) {
+      mobileStr = `+91${mobileStr}`;
+    }
+
     const user = await prisma.user.findUnique({
       where: { mobile: mobileStr },
       include: { spProfile: true },
