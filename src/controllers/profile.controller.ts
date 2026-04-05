@@ -1,9 +1,25 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { getCache, setCache, deleteCache } from '../services/redis.service';
-import { uploadFile } from '../services/s3.service';
+import { uploadFile, getPresignedUrl } from '../services/s3.service';
 
 const prisma = new PrismaClient();
+
+// Helper to handle legacy full URLs and generate signed URLs
+const getAvatarUrl = async (url: string | null): Promise<string | null> => {
+  if (!url) return null;
+  // If it's already a full URL (legacy), extract the key
+  let key = url;
+  if (url.includes('.amazonaws.com/')) {
+    key = url.split('.amazonaws.com/')[1];
+  }
+  try {
+    return await getPresignedUrl(key, 3600); // 1 hour expiry
+  } catch (err) {
+    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
+    return null;
+  }
+};
 
 // Cache profiles for 10 minutes (600 seconds)
 const PROFILE_CACHE_TTL = 600;
@@ -17,12 +33,15 @@ export const getProfile = async (req: any, res: Response) => {
     const cachedData = await getCache(PROFILE_CACHE_KEY);
     if (cachedData) {
       console.log(`[Redis] Profile Cache Hit for userID: ${userId}`);
-      return res.status(200).json({ success: true, data: JSON.parse(cachedData) });
+      const profile = JSON.parse(cachedData);
+      // Still need to refresh signed URL periodically even if metadata is cached
+      profile.profilePictureUrl = await getAvatarUrl(profile.profilePictureUrl);
+      return res.status(200).json({ success: true, data: profile });
     }
 
     // 2. If not in Redis, fetch from PostgreSQL using Prisma
     console.log(`[Redis] Profile Cache Miss. Fetching from Database for userID: ${userId}...`);
-    const profile = await prisma.profile.findUnique({
+    const profile: any = await prisma.profile.findUnique({
       where: { userId },
       include: {
         user: {
@@ -35,11 +54,24 @@ export const getProfile = async (req: any, res: Response) => {
     });
 
     if (!profile) {
-      return res.status(404).json({ success: false, message: 'Profile not found' });
+      console.log(`[Profile] No profile found for userId: ${userId}, returning default.`);
+      const defaultProfile = {
+        fullName: 'Valued Client',
+        profilePictureUrl: null,
+        bio: '',
+        user: {
+          mobile: '...', // We could fetch user mobile here if we wanted
+          role: 'CUSTOMER'
+        }
+      };
+      return res.status(200).json({ success: true, data: defaultProfile });
     }
 
-    // 3. Store in Redis
+    // 3. Store in Redis (store the RAW KEY from DB)
     await setCache(PROFILE_CACHE_KEY, profile, PROFILE_CACHE_TTL);
+
+    // 4. Return with Signed URL
+    profile.profilePictureUrl = await getAvatarUrl(profile.profilePictureUrl);
 
     res.status(200).json({ success: true, data: profile });
   } catch (error) {
@@ -75,11 +107,17 @@ export const updateProfile = async (req: any, res: Response) => {
       },
     });
 
-    // 2. Invalidate the Redis cache (Force refresh on next fetch)
+    // 2. Invalidate the Redis cache
     await deleteCache(PROFILE_CACHE_KEY);
     console.log(`[Redis] Profile Cache Invalidated for userID: ${userId}`);
 
-    res.status(200).json({ success: true, message: 'Profile updated successfully', data: profile });
+    // Return with Signed URL for immediate UI update
+    const signedUrl = await getAvatarUrl(profilePictureUrl);
+    res.status(200).json({ 
+      success: true, 
+      message: 'Profile updated successfully', 
+      data: { ...profile, profilePictureUrl: signedUrl } 
+    });
   } catch (error) {
     console.error('Error updating profile:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -110,10 +148,13 @@ export const uploadProfilePicture = async (req: any, res: Response) => {
     // Invalidate Cache
     await deleteCache(`profile:${userId}`);
 
+    // Generate signed URL for response
+    const signedUrl = await getAvatarUrl(profilePictureUrl);
+
     res.status(200).json({
       success: true,
       message: 'Profile picture uploaded successfully',
-      url: profilePictureUrl,
+      url: signedUrl,
     });
   } catch (error: any) {
     console.error('S3 Upload Error:', error);

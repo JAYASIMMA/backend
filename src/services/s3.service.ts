@@ -32,8 +32,8 @@ export const uploadFile = async (
 
   await s3Client.send(command);
   
-  // Return the public URL (Note: In a real production environment, you might use CloudFront or Private buckets)
-  return `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileName}`;
+  // Return the KEY only, let controllers decide how to serve it (Public vs Signed)
+  return fileName;
 };
 
 /**

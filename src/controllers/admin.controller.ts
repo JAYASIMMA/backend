@@ -63,22 +63,20 @@ export const getSPs = async (req: Request, res: Response) => {
     // Enrich with Presigned URLs
     const enrichedSPs = await Promise.all(sps.map(async (sp: any) => {
         // Sign Profile Picture
-        if (sp.profile?.profilePictureUrl?.includes('amazonaws.com')) {
+        if (sp.profile?.profilePictureUrl) {
             try {
-                const url = new URL(sp.profile.profilePictureUrl);
-                const key = url.pathname.startsWith('/') ? url.pathname.substring(1) : url.pathname;
-                if (key) {
-                    sp.profile.profilePictureUrl = await getPresignedUrl(key, 3600);
-                }
+                const url = sp.profile.profilePictureUrl;
+                const key = url.includes('amazonaws.com/') ? url.split('amazonaws.com/')[1] : url;
+                if (key) sp.profile.profilePictureUrl = await getPresignedUrl(key, 3600);
             } catch (e) {
                 console.error('Sign Profile Pic Error for partner:', sp.mobile, e);
             }
         }
         // Sign Aadhar Card
-        if (sp.spProfile?.aadharCardUrl?.includes('amazonaws.com')) {
+        if (sp.spProfile?.aadharCardUrl) {
            try {
-               const url = new URL(sp.spProfile.aadharCardUrl);
-               const key = url.pathname.substring(1);
+               const url = sp.spProfile.aadharCardUrl;
+               const key = url.includes('amazonaws.com/') ? url.split('amazonaws.com/')[1] : url;
                if (key) sp.spProfile.aadharCardUrl = await getPresignedUrl(key, 3600);
            } catch (e) {
                console.error('Sign Aadhar Error:', e);
@@ -130,21 +128,24 @@ export const getAudits = async (req: Request, res: Response) => {
 
 // Onboard New Service Provider
 export const createSP = async (req: Request, res: Response) => {
-  const { mobile, fullName, aadharNumber, address, latitude, longitude, bio, categoryName, subCategoryName } = req.body;
+  const { mobile, fullName, aadharNumber, address, latitude, longitude, bio, categoryName, subCategoryName, password } = req.body;
   const files = req.files as { [fieldname: string]: Express.Multer.File[] };
   
-  let aadharCardUrl = undefined;
-  let profilePictureUrl = undefined;
+  let aadharCardUrl: string | undefined = undefined;
+  let profilePictureUrl: string | undefined = undefined;
 
   try {
+    const bcrypt = require('bcryptjs');
+    const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
+
     // Check if user exists
     let user = await prisma.user.findUnique({ where: { mobile } });
     
     // Role check: Only block if user is an ADMIN (to prevent role downgrade or duplicate)
-    // We allow CUSTOMERS to be upgraded to SP and existing SPs to be updated.
     if (user && user.role === 'ADMIN') {
        return res.status(400).json({ success: false, message: 'Cannot modify an Administrator account via this panel.' });
     }
+
     // Handle Profile Picture
     if (files?.profilePicture?.[0]) {
       profilePictureUrl = await uploadFile(files.profilePicture[0], 'profiles');
@@ -158,11 +159,18 @@ export const createSP = async (req: Request, res: Response) => {
     if (user) {
       user = await prisma.user.update({
         where: { id: user.id },
-        data: { role: 'SP' }
+        data: { 
+          role: 'SP',
+          ...(passwordHash && { passwordHash })
+        }
       });
     } else {
       user = await prisma.user.create({
-        data: { mobile, role: 'SP' }
+        data: { 
+          mobile, 
+          role: 'SP',
+          passwordHash: passwordHash || "" // Set a placeholder or fail if no password
+        }
       });
     }
 
@@ -179,7 +187,7 @@ export const createSP = async (req: Request, res: Response) => {
       }
     });
 
-    const spProfile = await (prisma as any).serviceProviderProfile.upsert({
+    const spProfile = await prisma.serviceProviderProfile.upsert({
       where: { userId: user.id },
       update: { 
         aadharNumber, 

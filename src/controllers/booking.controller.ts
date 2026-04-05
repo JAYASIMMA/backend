@@ -35,11 +35,11 @@ export const createBooking = async (req: any, res: Response) => {
       data: {
         customerId: req.userId,
         categoryId,
-        subCategoryId,
+        subCategoryId: subCategoryId || null,
         locationId,
-        messageText,
-        audioMessageUrl,
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        messageText: messageText || null,
+        audioMessageUrl: audioMessageUrl || null,
+        scheduledAt: (scheduledAt && scheduledAt !== 'null') ? new Date(scheduledAt) : null,
         status: 'PENDING',
       },
     });
