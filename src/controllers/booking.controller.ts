@@ -83,6 +83,9 @@ export const getActiveBookings = async (req: any, res: Response) => {
       include: {
         category: true,
         location: true,
+        customer: {
+          include: { profile: true }
+        },
         sp: {
           include: { profile: true }
         }
@@ -261,5 +264,28 @@ export const getBookingHistory = async (req: any, res: Response) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+export const submitFeedback = async (req: any, res: Response) => {
+  const { requestId, rating, comment } = req.body;
+
+  if (!requestId || !rating) {
+    return res.status(400).json({ success: false, message: 'Request ID and Rating are required' });
+  }
+
+  try {
+    const feedback = await prisma.feedback.create({
+      data: {
+        requestId,
+        rating: parseInt(rating),
+        comment: comment || null,
+      },
+    });
+
+    res.status(201).json({ success: true, data: feedback });
+  } catch (error: any) {
+    console.error('Submit Feedback Error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error', debug: error.message });
   }
 };

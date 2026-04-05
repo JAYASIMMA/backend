@@ -34,6 +34,7 @@ router.get('/bookings/active', authenticate, bookingController.getActiveBookings
 router.get('/bookings/history', authenticate, bookingController.getBookingHistory);
 router.patch('/bookings/:id/status', authenticate, bookingController.updateBookingStatus);
 router.post('/bookings/:id/cancel', authenticate, bookingController.cancelBooking);
+router.post('/bookings/feedback', authenticate, authorize(['CUSTOMER']), bookingController.submitFeedback);
 
 // Profile Routes
 router.get('/profile', authenticate, profileController.getProfile);
