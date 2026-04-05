@@ -24,6 +24,13 @@ export const createAddress = async (req: any, res: Response) => {
   }
 
   try {
+    const existing = await prisma.address.findFirst({
+        where: { customerId: req.userId, label: label, addressLine: addressLine }
+    });
+
+    if (existing) {
+        return res.status(400).json({ success: false, message: 'Address already exists' });
+    }
     // PostGIS coordinate mapping (Prisma raw query for Unsupported geography type)
     const result: any = await prisma.$executeRawUnsafe(
       `INSERT INTO "Address" (id, "customerId", label, "addressLine", city, pincode, coordinates, "isDefault", "updatedAt") 
@@ -38,7 +45,12 @@ export const createAddress = async (req: any, res: Response) => {
       isDefault || false
     );
 
-    res.status(201).json({ success: true, message: 'Address created successfully' });
+    const newAddress = await prisma.address.findFirst({
+        where: { customerId: req.userId },
+        orderBy: { createdAt: 'desc' }
+    });
+
+    res.status(201).json({ success: true, message: 'Address created successfully', address: newAddress });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
