@@ -57,6 +57,8 @@ router.put('/categories/:id', authenticate, authorize(['ADMIN']), upload.single(
 router.delete('/categories/:id', authenticate, authorize(['ADMIN']), categoryController.deleteCategory);
 router.get('/subcategories', categoryController.getSubcategories);
 router.post('/subcategories', authenticate, authorize(['ADMIN']), upload.single('icon'), categoryController.createSubcategory);
+router.put('/subcategories/:id', authenticate, authorize(['ADMIN']), upload.single('icon'), categoryController.updateSubcategory);
+router.delete('/subcategories/:id', authenticate, authorize(['ADMIN']), categoryController.deleteSubcategory);
 
 // Admin Specific Routes
 router.get('/admin/stats', authenticate, authorize(['ADMIN']), adminController.getDashboardStats);

@@ -209,3 +209,51 @@ export const deleteCategory = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: 'Delete failed' });
   }
 };
+
+// Update Subcategory
+export const updateSubcategory = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { name } = req.body;
+  let iconUrl = req.body.iconUrl;
+
+  try {
+    if (req.file) {
+      iconUrl = await uploadFile(req.file as any, 'subcategories');
+    }
+
+    const subcategory = await prisma.serviceSubcategory.update({
+      where: { id },
+      data: { name, iconUrl }
+    });
+    
+    // Invalidate main categories cache
+    await deleteCache(CATEGORIES_CACHE_KEY);
+    // Invalidate specific subcategory caches
+    const categoryId = subcategory.categoryId;
+    await deleteCache(`subcategories_${categoryId}`);
+    await deleteCache('all_subcategories');
+
+    res.status(200).json({ success: true, data: subcategory });
+  } catch (error) {
+    console.error('Update Subcategory Error:', error);
+    res.status(500).json({ success: false, message: 'Update failed' });
+  }
+};
+
+// Delete Subcategory
+export const deleteSubcategory = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const sub = await prisma.serviceSubcategory.delete({ where: { id } });
+    
+    // Invalidate caches
+    await deleteCache(CATEGORIES_CACHE_KEY);
+    await deleteCache(`subcategories_${sub.categoryId}`);
+    await deleteCache('all_subcategories');
+    
+    res.status(200).json({ success: true, message: 'Subcategory deleted' });
+  } catch (error) {
+    console.error('Delete Subcategory Error:', error);
+    res.status(500).json({ success: false, message: 'Delete failed' });
+  }
+};
