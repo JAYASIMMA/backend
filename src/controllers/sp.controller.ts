@@ -317,3 +317,43 @@ export const getServiceHistory = async (req: any, res: Response) => {
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
+
+/**
+ * Get all feedbacks for a specific Service Provider
+ */
+export const getSPFeedbacks = async (req: Request, res: Response) => {
+    const { id } = req.params;
+
+    try {
+        const feedbacks = await prisma.feedback.findMany({
+            where: {
+                request: {
+                    spId: id
+                }
+            },
+            include: {
+                request: {
+                    include: {
+                        customer: {
+                            include: { profile: true }
+                        }
+                    }
+                }
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        // Sign any audio feedback URLs if they exist
+        const processedFeedbacks = await Promise.all(feedbacks.map(async (f: any) => {
+            return {
+                ...f,
+                audioFeedbackUrl: await getSignedAssetUrl(f.audioFeedbackUrl)
+            };
+        }));
+
+        res.status(200).json({ success: true, data: processedFeedbacks });
+    } catch (error) {
+        console.error('Get SP Feedbacks Error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};

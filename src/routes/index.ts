@@ -21,6 +21,7 @@ router.post('/auth/sp/signup', spController.signup);
 
 // Public Passport View (Global)
 router.get('/public/passport/:id', spController.getPublicPassport);
+router.get('/sp/:id/feedbacks', spController.getSPFeedbacks);
 
 // Location Routes (Customer only)
 router.get('/customer/addresses', authenticate, authorize(['CUSTOMER']), locationController.getAddresses);
@@ -49,6 +50,7 @@ router.get('/sp/broadcasts', authenticate, authorize(['SP']), spController.getBr
 // ...
 // Category Routes
 router.get('/categories', categoryController.getCategories);
+router.get('/categories/:id', categoryController.getCategoryById);
 router.post('/categories', authenticate, authorize(['ADMIN']), upload.single('icon'), categoryController.createCategory);
 router.put('/categories/:id', authenticate, authorize(['ADMIN']), upload.single('icon'), categoryController.updateCategory);
 router.delete('/categories/:id', authenticate, authorize(['ADMIN']), categoryController.deleteCategory);

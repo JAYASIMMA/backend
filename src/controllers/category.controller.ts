@@ -6,55 +6,97 @@ import { getPresignedUrl, uploadFile } from '../services/s3.service';
 const prisma = new PrismaClient();
 const CATEGORIES_CACHE_KEY = 'service_categories';
 
+// Helper to handle legacy full URLs and generate signed URLs for icons
+const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
+  if (!url) return null;
+  // If it's already a full URL (including presigned params), skip
+  if (url.includes('X-Amz-Signature=')) return url;
+  
+  let key = url;
+  if (url.includes('.amazonaws.com/')) {
+    const parts = url.split('.amazonaws.com/');
+    if (parts.length > 1) {
+      key = parts[1];
+    }
+  }
+
+  if (!key || key.startsWith('http')) return url; // Fallback if we can't extract key
+
+  try {
+    return await getPresignedUrl(key, 3600); // 1 hour expiry
+  } catch (err) {
+    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
+    return null;
+  }
+};
+
 export const getCategories = async (req: Request, res: Response) => {
   try {
     const cachedData = await getCache(CATEGORIES_CACHE_KEY);
     if (cachedData) {
       console.log('[Redis] Categories Cache Hit');
-      return res.status(200).json({ success: true, data: JSON.parse(cachedData) });
+      const cats = JSON.parse(cachedData);
+      // Still need to re-sign URLs even if from cache because they expire!
+      const signedCats = await Promise.all(cats.map(async (cat: any) => ({
+          ...cat,
+          iconUrl: await getSignedAssetUrl(cat.iconUrl),
+          subCategories: cat.subCategories ? await Promise.all(cat.subCategories.map(async (sub: any) => ({
+              ...sub,
+              iconUrl: await getSignedAssetUrl(sub.iconUrl)
+          }))) : []
+      })));
+      return res.status(200).json({ success: true, data: signedCats });
     }
 
     console.log('[Redis] Categories Cache Miss. Fetching from Database...');
     const categories = await prisma.serviceCategory.findMany({
-      include: {
-        subCategories: true,
-      },
+      include: { subCategories: true },
       orderBy: { name: 'asc' },
     });
 
-    // Generate Presigned URLs for icons if they are stored as S3 links
-    const enrichedCategories = await Promise.all(categories.map(async (cat) => {
-       if (cat.iconUrl && cat.iconUrl.includes('amazonaws.com')) {
-          try {
-             // Extract key: everything after the domain
-             const key = cat.iconUrl.split('.com/')[1];
-             if (key) {
-                cat.iconUrl = await getPresignedUrl(key, 3600); // Valid for 1 hour
-             }
-          } catch (e) {
-             console.error('Presigning failed for:', cat.name);
-          }
-       }
-       
-       // Also handle subcategories
-       if (cat.subCategories) {
-          cat.subCategories = await Promise.all(cat.subCategories.map(async (sub) => {
-             if (sub.iconUrl && sub.iconUrl.includes('amazonaws.com')) {
-                try {
-                   const key = sub.iconUrl.split('.com/')[1];
-                   if (key) sub.iconUrl = await getPresignedUrl(key, 3600);
-                } catch (e) {}
-             }
-             return sub;
-          }));
-       }
-       return cat;
-    }));
+    await setCache(CATEGORIES_CACHE_KEY, categories, 3600);
+    
+    // Sign for response
+    const enrichedCategories = await Promise.all(categories.map(async (cat: any) => ({
+        ...cat,
+        iconUrl: await getSignedAssetUrl(cat.iconUrl),
+        subCategories: cat.subCategories ? await Promise.all(cat.subCategories.map(async (sub: any) => ({
+            ...sub,
+            iconUrl: await getSignedAssetUrl(sub.iconUrl)
+        }))) : []
+    })));
 
-    await setCache(CATEGORIES_CACHE_KEY, enrichedCategories, 3600);
     res.status(200).json({ success: true, data: enrichedCategories });
   } catch (error) {
     console.error('Error fetching categories:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+export const getCategoryById = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const category = await prisma.serviceCategory.findUnique({
+      where: { id },
+      include: { subCategories: true }
+    });
+
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    const enriched = {
+      ...category,
+      iconUrl: await getSignedAssetUrl(category.iconUrl),
+      subCategories: await Promise.all(category.subCategories.map(async (sub) => ({
+        ...sub,
+        iconUrl: await getSignedAssetUrl(sub.iconUrl)
+      })))
+    };
+
+    res.status(200).json({ success: true, data: enriched });
+  } catch (error) {
+    console.error('Error fetching category by ID:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };

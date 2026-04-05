@@ -34,6 +34,11 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
         data: {
           mobile: phone_number,
           role: 'CUSTOMER',
+          profile: {
+            create: {
+              fullName: 'Valued Client'
+            }
+          }
         },
       });
     }
@@ -91,6 +96,11 @@ export const customerDirectLogin = async (req: Request, res: Response) => {
         data: {
           mobile: mobileStr,
           role: 'CUSTOMER',
+          profile: {
+            create: {
+              fullName: 'Valued Client'
+            }
+          }
         },
       });
     }
