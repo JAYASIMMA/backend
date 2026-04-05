@@ -4,8 +4,13 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  const mobile = '9884986223'; // Default SuperAdmin Mobile
+  let mobile = '9884633223'; // Default SuperAdmin Mobile
   const password = 'admin1984'; // Default SuperAdmin Password
+
+  // Normalize: Add +91 prefix to match backend login logic
+  if (mobile.length === 10 && !mobile.startsWith('+')) {
+    mobile = `+91${mobile}`;
+  }
 
   try {
     console.log('--- SuperAdmin Secret Seeding ---');
