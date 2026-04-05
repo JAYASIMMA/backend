@@ -8,10 +8,22 @@ const prisma = new PrismaClient();
 
 const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
   if (!url) return null;
+  // If it's already a full URL (including presigned params), skip
+  if (url.includes('X-Amz-Signature=')) return url;
+  
   let key = url;
   if (url.includes('.amazonaws.com/')) {
-    key = url.split('.amazonaws.com/')[1];
+    const parts = url.split('.amazonaws.com/');
+    if (parts.length > 1) {
+      key = parts[1];
+    }
   }
+
+  if (!key || key.startsWith('http')) {
+      // If we couldn't extract a reliable key, return null instead of crashing
+      return null;
+  }
+
   try {
     return await getPresignedUrl(key, 3600);
   } catch (err) {
@@ -134,56 +146,71 @@ export const getBroadcasts = async (req: any, res: Response) => {
   }
 
   const userId = req.userId;
-  console.log(`[BROADCAST] SP ${userId} @ [${lat}, ${lng}] Radius: ${radius}m`);
+  
+  // 📍 PRINT WORKER LOCATION IN TERMINAL
+  console.log('---------------------------------------------------------');
+  console.log(`[WORKER LOCATION] SP_ID: ${userId}`);
+  console.log(`[COORDINATES] Lat: ${lat}, Lng: ${lng}`);
+  console.log(`[SETTINGS] Search Radius: ${radius}m`);
+  console.log('---------------------------------------------------------');
 
-    try {
-      // 0. Check if SP has any active WORK_STARTED job.
-      const activeWork = await prisma.serviceRequest.findFirst({
-        where: {
-          spId: userId,
-          status: { in: ['WORK_STARTED', 'TEMP_WORK_STARTED', 'TEMP_COMPLETED'] }
-        }
-      });
-
-      if (activeWork) {
-        console.log(`[BROADCAST] SP ${userId} is busy with job ${activeWork.id}. Hiding new broadcasts.`);
-        return res.status(200).json({ success: true, data: [] });
+  try {
+    // 0. Check if SP has any active WORK_STARTED job.
+    const activeWork = await prisma.serviceRequest.findFirst({
+      where: {
+        spId: userId,
+        status: { in: ['WORK_STARTED', 'TEMP_WORK_STARTED', 'TEMP_COMPLETED'] }
       }
+    });
 
-      const spProfile = await prisma.serviceProviderProfile.findUnique({
-        where: { userId }
-      });
+    if (activeWork) {
+      console.log(`[BROADCAST] SP ${userId} is busy with job ${activeWork.id}. Hiding new broadcasts.`);
+      return res.status(200).json({ success: true, data: [] });
+    }
 
-      const categoryName = spProfile?.categoryName;
-      console.log(`[BROADCAST] SP Category: ${categoryName}`);
+    const spProfile = await prisma.serviceProviderProfile.findUnique({
+      where: { userId }
+    });
 
-      const requests: any[] = await prisma.$queryRaw`
-        SELECT sr.*, a."addressLine", a.label, c.name as "categoryName"
-        FROM "ServiceRequest" sr
-        JOIN "Address" a ON sr."locationId" = a.id
-        JOIN "ServiceCategory" c ON sr."categoryId" = c.id
-        WHERE sr.status = 'PENDING'
-        AND ST_DWithin(
-          a.coordinates,
-          ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography,
-          ${parseFloat(radius as string)}
-        )
-        ${categoryName ? Prisma.sql`AND c.name ILIKE ${'%' + categoryName + '%'}` : Prisma.empty}
-        ORDER BY sr."createdAt" DESC
-      `;
+    const categoryName = spProfile?.categoryName;
+    console.log(`[BROADCAST] SP Filter Category: ${categoryName || 'None'}`);
 
-      // Sign the audio URLs
-      const processedRequests = await Promise.all(requests.map(async (r: any) => {
-        return {
-          ...r,
-          audioMessageUrl: await getSignedAssetUrl(r.audioMessageUrl)
-        };
-      }));
+    // Construct query using Prisma.sql to handle conditional ILIKE safely
+    const query = Prisma.sql`
+      SELECT sr.*, a."addressLine", a.label, c.name as "categoryName"
+      FROM "ServiceRequest" sr
+      JOIN "Address" a ON sr."locationId" = a.id
+      JOIN "ServiceCategory" c ON sr."categoryId" = c.id
+      WHERE sr.status = 'PENDING'
+      /* Temporarily disabled radius filter for development/testing visibility */
+      /* AND ST_DWithin(
+        a.coordinates,
+        ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography,
+        ${parseFloat(radius as string)}
+      ) */
+      ${categoryName ? Prisma.sql`AND c.name ILIKE ${'%' + categoryName + '%'}` : Prisma.empty}
+      ORDER BY sr."createdAt" DESC
+    `;
+
+    const requests: any[] = await prisma.$queryRaw(query);
+
+    // Sign the audio URLs
+    const processedRequests = await Promise.all(requests.map(async (r: any) => {
+      return {
+        ...r,
+        audioMessageUrl: await getSignedAssetUrl(r.audioMessageUrl)
+      };
+    }));
 
       res.status(200).json({ success: true, data: processedRequests });
-    } catch (error) {
-      console.error('Broadcast Error:', error);
-      res.status(500).json({ success: false, message: 'Internal server error' });
+    } catch (error: any) {
+      console.error('[SP_CONTROLLER] getBroadcasts FATAL ERROR:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: 'Internal server error',
+        debug: error.message,
+        stack: error.stack 
+      });
     }
   };
 
