@@ -20,9 +20,9 @@ redis.on('ready', () => {
   console.log('[Redis] Successfully connected and ready');
 });
 
-redis.on('error', (err) => {
+redis.on('error', (err: any) => {
   // Suppress spammy connection errors in logs since we fallback to DB gracefully
-  if (err.code !== 'ECONNREFUSED' && err.code !== 'ETIMEDOUT') {
+  if (err && err.code !== 'ECONNREFUSED' && err.code !== 'ETIMEDOUT') {
     console.error('[Redis] Unexpected error:', err.message);
   }
 });
