@@ -33,8 +33,10 @@ async function main() {
     console.log(`🔑 Password: ${password}`);
     console.log('--- Use these credentials at POST /api/v1/auth/login ---');
 
-  } catch (error) {
-    console.error('❌ Failed to seed SuperAdmin:', error);
+  } catch (error: any) {
+    console.error('❌ Failed to seed SuperAdmin:', error.message || error);
+    if (error.code) console.error('Error Code:', error.code);
+    if (error.meta) console.error('Error Meta:', error.meta);
   } finally {
     await prisma.$disconnect();
   }

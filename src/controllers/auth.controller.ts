@@ -17,9 +17,11 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
     // 1. Verify token with Firebase
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const { uid, phone_number } = decodedToken;
+    console.log(`Firebase Auth Sync: Token verified for UID: ${uid}, Phone: ${phone_number}`);
 
     if (!phone_number) {
-      return res.status(401).json({ success: false, message: 'Invalid token: No phone number' });
+      console.error(`Firebase Auth Sync: No phone number associated with token (UID: ${uid})`);
+      return res.status(401).json({ success: false, message: 'Invalid token: No phone number found in Firebase token' });
     }
 
     // 2. Find or create user in our DB

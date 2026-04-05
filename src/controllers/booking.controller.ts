@@ -1,16 +1,36 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { uploadFile } from '../services/s3.service';
 
 const prisma = new PrismaClient();
 
 export const createBooking = async (req: any, res: Response) => {
-  const { categoryId, subCategoryId, locationId, messageText, audioMessageUrl, scheduledAt } = req.body;
+  let { categoryId, subCategoryId, locationId, messageText, audioMessageUrl, scheduledAt } = req.body;
 
   if (!categoryId || !locationId) {
+    console.warn(`[CREATE BOOKING] Validation Failed: categoryId=${categoryId}, locationId=${locationId}`);
     return res.status(400).json({ success: false, message: 'Category and Location IDs are required' });
   }
 
+  console.log(`[CREATE BOOKING] Initiated by user: ${req.userId} for category: ${categoryId}`);
+  console.log(`[CREATE BOOKING] req.file present: ${!!req.file}`);
+  if (req.file) {
+     console.log(`[CREATE BOOKING] File details: name=${req.file.originalname}, size=${req.file.size}, type=${req.file.mimetype}`);
+  }
+
   try {
+    // If a file is uploaded (voice instruction), send it to S3
+    if (req.file) {
+      try {
+        console.log('[CREATE BOOKING] Uploading voice instruction to S3...');
+        audioMessageUrl = await uploadFile(req.file, 'audio');
+        console.log(`[CREATE BOOKING] Audio S3 URL: ${audioMessageUrl}`);
+      } catch (uploadErr: any) {
+        console.error('[CREATE BOOKING] S3 Upload Error:', uploadErr.message);
+        // We continue with null URL if upload fails, or we can throw
+      }
+    }
+
     const booking = await prisma.serviceRequest.create({
       data: {
         customerId: req.userId,
@@ -24,6 +44,7 @@ export const createBooking = async (req: any, res: Response) => {
       },
     });
 
+    console.log(`[CREATE BOOKING] Successfully created booking ID: ${booking.id}`);
     res.status(201).json({ success: true, data: booking });
   } catch (error) {
     console.error(error);

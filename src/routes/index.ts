@@ -28,7 +28,7 @@ router.post('/customer/addresses', authenticate, authorize(['CUSTOMER']), locati
 router.put('/customer/addresses/:id/default', authenticate, authorize(['CUSTOMER']), locationController.setDefaultAddress);
 
 // Booking Routes
-router.post('/bookings', authenticate, authorize(['CUSTOMER']), bookingController.createBooking);
+router.post('/bookings', authenticate, authorize(['CUSTOMER']), upload.single('audio'), bookingController.createBooking);
 router.get('/bookings/active', authenticate, bookingController.getActiveBookings);
 router.get('/bookings/history', authenticate, bookingController.getBookingHistory);
 router.patch('/bookings/:id/status', authenticate, bookingController.updateBookingStatus);

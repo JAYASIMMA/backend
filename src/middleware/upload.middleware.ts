@@ -8,11 +8,17 @@ export const upload = multer({
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
   fileFilter: (_req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    console.log(`Incoming file: ${file.originalname}, MIME: ${file.mimetype}`);
+    const allowedTypes = [
+      'image/jpeg', 'image/png', 'image/webp', 'application/pdf',
+      'audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/x-m4a', 'audio/mp3', 'audio/aac',
+      'application/octet-stream' // Dio default fallback
+    ];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only images and PDFs are allowed'));
+      console.error(`File rejected. MIME type ${file.mimetype} is not allowed.`);
+      cb(new Error(`File type ${file.mimetype} not allowed`));
     }
   },
 });
