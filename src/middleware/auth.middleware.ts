@@ -1,31 +1,45 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import * as admin from 'firebase-admin';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 export const authenticate = async (req: any, res: Response, next: NextFunction) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ success: false, message: 'No token provided' });
   }
 
+  const token = authHeader.split(' ')[1];
+
   try {
-    // 1. Try Firebase ID Token first (for Flutter apps)
+    // 1. Try Firebase ID Token first (for Flutter apps directly sending FB tokens)
     try {
       const decodedFirebase = await admin.auth().verifyIdToken(token);
-      req.userId = decodedFirebase.uid;
-      // We'll need a way to map Firebase UID to our DB userId in controllers
-      // or we can attach the whole decoded token.
+      
+      // We must map Firebase user to our internal DB user
+      const user = await prisma.user.findUnique({
+        where: { mobile: decodedFirebase.phone_number },
+      });
+
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'User not synchronized with backend' });
+      }
+
+      req.userId = user.id;
+      req.role = user.role;
       req.firebaseUser = decodedFirebase;
       return next();
     } catch (fbError) {
-      // Not a firebase token, try fallback to local JWT (for Admin Web or legacy)
+      // 2. Fallback to our local JWT (signed by our backend)
       const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'secret');
       req.userId = decoded.userId;
       req.role = decoded.role;
       next();
     }
   } catch (error) {
+    console.error('Auth Middleware Error:', error);
     return res.status(401).json({ success: false, message: 'Invalid or expired token' });
   }
 };

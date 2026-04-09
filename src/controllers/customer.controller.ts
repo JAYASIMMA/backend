@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import * as s3Service from '../services/s3.service';
+import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -57,7 +58,7 @@ export const setupProfile = async (req: any, res: Response) => {
           ${addressLine}, 
           ${currentCity}, 
           ${pincode}, 
-          ST_GeogFromText('POINT(80.2707 13.0827)'), 
+          ST_GeographyFromText('POINT(80.2707 13.0827)'), 
           true, 
           NOW()
         )
