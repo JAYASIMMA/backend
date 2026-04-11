@@ -6,6 +6,9 @@ import * as admin from 'firebase-admin';
 
 const prisma = new PrismaClient();
 
+/**
+ * Verify Firebase ID Token with our backend and generate a local JWT
+ */
 export const verifyFirebaseToken = async (req: Request, res: Response) => {
   const { idToken } = req.body;
 
@@ -14,13 +17,12 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
   }
 
   try {
-    // 1. Verify token with Firebase
+    // 1. Verify token with Firebase Admin SDK
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const { uid, phone_number } = decodedToken;
     console.log(`Firebase Auth Sync: Token verified for UID: ${uid}, Phone: ${phone_number}`);
 
     if (!phone_number) {
-      console.error(`Firebase Auth Sync: No phone number associated with token (UID: ${uid})`);
       return res.status(401).json({ success: false, message: 'Invalid token: No phone number found in Firebase token' });
     }
 
@@ -51,7 +53,7 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
     
     const isProfileComplete = !!(userWithDetails?.profile?.fullName && userWithDetails.addresses.length > 0);
 
-    // 3. Generate our OWN backend JWT
+    // 3. Generate our OWN backend JWT for session management
     const token = jwt.sign(
       { userId: user.id, mobile: user.mobile, role: user.role },
       process.env.JWT_SECRET || 'secret',
@@ -67,68 +69,6 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Firebase Auth Verification Error:', error);
     res.status(401).json({ success: false, message: 'Invalid or expired Firebase token' });
-  }
-};
-
-/**
- * Simplified Direct Login for Customers (Skips OTP for testing/onboarding)
- */
-export const customerDirectLogin = async (req: Request, res: Response) => {
-  const { mobile } = req.body;
-
-  if (!mobile) {
-    return res.status(400).json({ success: false, message: 'Mobile number is required' });
-  }
-
-  try {
-    let mobileStr = mobile.toString().trim();
-    if (mobileStr.length === 10 && !mobileStr.startsWith('+')) {
-      mobileStr = `+91${mobileStr}`;
-    }
-
-    // Find or create customer
-    let user = await prisma.user.findUnique({
-      where: { mobile: mobileStr },
-    });
-
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          mobile: mobileStr,
-          role: 'CUSTOMER',
-          profile: {
-            create: {
-              fullName: 'Valued Client'
-            }
-          }
-        },
-      });
-    }
-
-    // Check if profile and address exist
-    const userWithDetails = await prisma.user.findUnique({
-      where: { id: user.id },
-      include: { profile: true, addresses: { take: 1 } },
-    });
-    
-    const isProfileComplete = !!(userWithDetails?.profile?.fullName && userWithDetails.addresses.length > 0);
-
-    // Generate JWT
-    const token = jwt.sign(
-      { userId: user.id, mobile: user.mobile, role: user.role },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '30d' }
-    );
-
-    res.status(200).json({ 
-      success: true, 
-      token, 
-      isProfileComplete,
-      role: user.role 
-    });
-  } catch (error: any) {
-    console.error('Direct Login Error:', error);
-    res.status(500).json({ success: false, message: 'Internal server error', debug: error.message });
   }
 };
 

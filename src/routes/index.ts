@@ -16,7 +16,6 @@ const router = express.Router();
 // Firebase Auth
 router.post('/auth/firebase-verify', authController.verifyFirebaseToken);
 router.post('/auth/login', authController.loginPassword);
-router.post('/auth/customer-direct-login', authController.customerDirectLogin);
 router.post('/auth/sp/signup', spController.signup);
 
 // Public Passport View (Global)
