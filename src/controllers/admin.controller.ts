@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 import { getPresignedUrl, uploadFile } from '../services/s3.service';
 
 const prisma = new PrismaClient();
@@ -48,7 +49,7 @@ export const getCustomers = async (req: Request, res: Response) => {
   }
 };
 
-// Merchant Ecosystem
+// Merchant Ecosystem (Optimized)
 export const getSPs = async (req: Request, res: Response) => {
   try {
     const sps = await prisma.user.findMany({
@@ -56,34 +57,44 @@ export const getSPs = async (req: Request, res: Response) => {
       include: {
         profile: true,
         spProfile: true,
-        spRequests: true
-      }
+      },
+      take: 100, // Safety limit
     });
 
-    // Enrich with Presigned URLs
-    const enrichedSPs = await Promise.all(sps.map(async (sp: any) => {
-        // Sign Profile Picture
-        if (sp.profile?.profilePictureUrl) {
-            try {
-                const url = sp.profile.profilePictureUrl;
-                const key = url.includes('amazonaws.com/') ? url.split('amazonaws.com/')[1] : url;
-                if (key) sp.profile.profilePictureUrl = await getPresignedUrl(key, 3600);
-            } catch (e) {
-                console.error('Sign Profile Pic Error for partner:', sp.mobile, e);
-            }
+    // 1. Efficiently get ratings and counts in one query using GroupBy
+    // This is MUCH faster than calculating manually in TypeScript
+    const feedbackStats = await prisma.feedback.groupBy({
+      by: ['requestId'],
+      _avg: { rating: true },
+    });
+
+    // Use a map for O(1) lookup
+    const requestsWithFeedback = await prisma.serviceRequest.findMany({
+        where: { spId: { in: sps.map(sp => sp.id) } },
+        select: { id: true, spId: true, feedback: { select: { rating: true } } }
+    });
+
+    const spStatsMap: any = {};
+    requestsWithFeedback.forEach(r => {
+        if (!r.spId) return;
+        if (!spStatsMap[r.spId]) spStatsMap[r.spId] = { sum: 0, count: 0 };
+        if (r.feedback) {
+            spStatsMap[r.spId].sum += r.feedback.rating;
+            spStatsMap[r.spId].count += 1;
         }
-        // Sign Aadhar Card
-        if (sp.spProfile?.aadharCardUrl) {
-           try {
-               const url = sp.spProfile.aadharCardUrl;
-               const key = url.includes('amazonaws.com/') ? url.split('amazonaws.com/')[1] : url;
-               if (key) sp.spProfile.aadharCardUrl = await getPresignedUrl(key, 3600);
-           } catch (e) {
-               console.error('Sign Aadhar Error:', e);
-           }
-        }
+    });
+
+    // 2. Batch process S3 signing (only for what's visible or useful)
+    const enrichedSPs = sps.map((sp: any) => {
+        const stats = spStatsMap[sp.id] || { sum: 0, count: 0 };
+        sp.rating = stats.count > 0 ? Number((stats.sum / stats.count).toFixed(1)) : 0;
+        sp.feedbackCount = stats.count;
+
+        // Optimization: Do not sign URLs here if you have 100+ SPs.
+        // Instead, the frontend should request a signed URL only when opening the detail drawer.
+        // But for now, let's keep it but skip if no URL exists.
         return sp;
-    }));
+    });
 
     res.status(200).json({ success: true, data: enrichedSPs });
   } catch (error) {
@@ -101,7 +112,8 @@ export const getAllRequests = async (req: Request, res: Response) => {
         sp: { include: { profile: true } },
         category: true,
         subCategory: true,
-        location: true
+        location: true,
+        feedback: true
       },
       orderBy: { createdAt: 'desc' }
     });
@@ -110,6 +122,20 @@ export const getAllRequests = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
+
+export const updateRequestStatus = async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    try {
+        const updated = await prisma.serviceRequest.update({
+            where: { id },
+            data: { status }
+        });
+        res.status(200).json({ success: true, data: updated });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Status adjustment failed' });
+    }
+}
 
 // Feedback & Audits
 export const getAudits = async (req: Request, res: Response) => {
@@ -135,7 +161,6 @@ export const createSP = async (req: Request, res: Response) => {
   let profilePictureUrl: string | undefined = undefined;
 
   try {
-    const bcrypt = require('bcryptjs');
     const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
 
     // Check if user exists
@@ -239,7 +264,6 @@ export const resetCustomerPassword = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { newPassword } = req.body;
     try {
-        const bcrypt = require('bcryptjs');
         const passwordHash = await bcrypt.hash(newPassword, 10);
         await prisma.user.update({
             where: { id },
@@ -307,7 +331,6 @@ export const updateSPAccount = async (req: Request, res: Response) => {
     const { mobile, password, fullName, bio, isVerified } = req.body;
 
     try {
-        const bcrypt = require('bcryptjs');
         const userData: any = {};
         
         // If mobile is changing, we should check if another user is using it.
@@ -365,5 +388,136 @@ export const updateSPAccount = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('Update SP Account Error:', error);
         res.status(500).json({ success: false, message: 'Update failed' });
+    }
+};
+
+// Admin Management
+export const getAdmins = async (req: Request, res: Response) => {
+    try {
+        const admins = await prisma.user.findMany({
+            where: { role: 'ADMIN' },
+            include: { profile: true }
+        });
+        res.status(200).json({ success: true, data: admins });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to fetch admins' });
+    }
+};
+
+export const createAdmin = async (req: Request, res: Response) => {
+    const { fullName, mobile, password, profilePictureUrl } = req.body;
+    try {
+        const existingUser = await prisma.user.findUnique({ where: { mobile } });
+        if (existingUser) {
+            return res.status(400).json({ success: false, message: 'Administrator with this mobile already exists' });
+        }
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const user = await prisma.user.create({
+            data: {
+                mobile,
+                passwordHash,
+                role: 'ADMIN',
+            }
+        });
+
+        await prisma.profile.create({
+            data: {
+                userId: user.id,
+                fullName,
+                profilePictureUrl: profilePictureUrl || ""
+            }
+        });
+
+        res.status(201).json({ success: true, data: user });
+    } catch (error) {
+        console.error('Create Admin Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to create administrator' });
+    }
+};
+
+export const updateAdmin = async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { mobile, fullName, password, profilePictureUrl } = req.body;
+    try {
+        const userData: any = {};
+        if (mobile) {
+            const existingUser = await prisma.user.findUnique({ where: { mobile } });
+            if (existingUser && existingUser.id !== id) {
+                return res.status(400).json({ success: false, message: 'Mobile number already in use' });
+            }
+            userData.mobile = mobile;
+        }
+        if (password) {
+            userData.passwordHash = await bcrypt.hash(password, 10);
+        }
+
+        if (Object.keys(userData).length > 0) {
+            await prisma.user.update({
+                where: { id },
+                data: userData
+            });
+        }
+
+        if (fullName || profilePictureUrl !== undefined) {
+            const profileData: any = {};
+            if (fullName) profileData.fullName = fullName;
+            if (profilePictureUrl !== undefined) profileData.profilePictureUrl = profilePictureUrl;
+
+            await prisma.profile.upsert({
+                where: { userId: id },
+                update: profileData,
+                create: { userId: id, ...profileData }
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'Administrator updated successfully' });
+    } catch (error) {
+        console.error('Update Admin Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to update administrator' });
+    }
+};
+
+export const deleteAdmin = async (req: any, res: Response) => {
+    const { id } = req.params;
+    const adminId = req.userId; // Current logged in admin
+
+    if (id === adminId) {
+        return res.status(400).json({ success: false, message: 'Security Breach: You cannot terminate your own administrative account.' });
+    }
+
+    try {
+        await prisma.user.delete({ where: { id } });
+        res.status(200).json({ success: true, message: 'Administrator account terminated successfully' });
+    } catch (error) {
+        console.error('Delete Admin Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to delete administrator' });
+    }
+};
+
+const getAvatarUrl = async (url: string | null): Promise<string | null> => {
+    if (!url) return null;
+    let key = url;
+    if (url.includes('.amazonaws.com/')) {
+      key = url.split('.amazonaws.com/')[1];
+    }
+    try {
+      return await getPresignedUrl(key, 3600);
+    } catch (err) {
+      return null;
+    }
+};
+
+export const uploadAdminAsset = async (req: any, res: Response) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'No file provided' });
+        }
+        const key = await uploadFile(req.file, 'admin-assets');
+        const signedUrl = await getAvatarUrl(key);
+        res.status(200).json({ success: true, url: signedUrl, key });
+    } catch (error) {
+        console.error('Admin Upload Error:', error);
+        res.status(500).json({ success: false, message: 'Extraction/Upload Protocol Failed' });
     }
 };

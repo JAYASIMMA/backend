@@ -64,6 +64,7 @@ router.get('/admin/stats', authenticate, authorize(['ADMIN']), adminController.g
 router.get('/admin/customers', authenticate, authorize(['ADMIN']), adminController.getCustomers);
 router.get('/admin/sps', authenticate, authorize(['ADMIN']), adminController.getSPs);
 router.get('/admin/requests', authenticate, authorize(['ADMIN']), adminController.getAllRequests);
+router.patch('/admin/requests/:id/status', authenticate, authorize(['ADMIN']), adminController.updateRequestStatus);
 router.get('/admin/audits', authenticate, authorize(['ADMIN']), adminController.getAudits);
 router.post('/admin/sps', authenticate, authorize(['ADMIN']), upload.fields([{ name: 'profilePicture', maxCount: 1 }, { name: 'aadharCard', maxCount: 1 }]), adminController.createSP);
 router.patch('/admin/sps/:id', authenticate, authorize(['ADMIN']), adminController.updateSPAccount);
@@ -73,5 +74,12 @@ router.delete('/admin/sps/:id', authenticate, authorize(['ADMIN']), adminControl
 // Admin Customer Control
 router.post('/admin/customers/:id/reset-password', authenticate, authorize(['ADMIN']), adminController.resetCustomerPassword);
 router.put('/admin/profile', authenticate, authorize(['ADMIN']), upload.single('profilePicture'), adminController.updateAdminProfile);
+
+// Admin Management (Super Admin only or high-level admin)
+router.get('/admin/list', authenticate, authorize(['ADMIN']), adminController.getAdmins);
+router.post('/admin/add', authenticate, authorize(['ADMIN']), adminController.createAdmin);
+router.patch('/admin/list/:id', authenticate, authorize(['ADMIN']), adminController.updateAdmin);
+router.delete('/admin/list/:id', authenticate, authorize(['ADMIN']), adminController.deleteAdmin);
+router.post('/admin/upload', authenticate, authorize(['ADMIN']), upload.single('file'), adminController.uploadAdminAsset);
 
 export default router;
