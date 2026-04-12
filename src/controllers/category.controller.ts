@@ -1,32 +1,8 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { getCache, setCache, deleteCache } from '../services/redis.service';
-import { getPresignedUrl, uploadFile } from '../services/s3.service';
+import { getPresignedUrl, uploadFile, getSignedAssetUrl } from '../services/s3.service';
 const CATEGORIES_CACHE_KEY = 'service_categories';
-
-// Helper to handle legacy full URLs and generate signed URLs for icons
-const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
-  if (!url) return null;
-  // If it's already a full URL (including presigned params), skip
-  if (url.includes('X-Amz-Signature=')) return url;
-  
-  let key = url;
-  if (url.includes('.amazonaws.com/')) {
-    const parts = url.split('.amazonaws.com/');
-    if (parts.length > 1) {
-      key = parts[1];
-    }
-  }
-
-  if (!key || key.startsWith('http')) return url; // Fallback if we can't extract key
-
-  try {
-    return await getPresignedUrl(key, 3600); // 1 hour expiry
-  } catch (err) {
-    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
-    return null;
-  }
-};
 
 export const getCategories = async (req: Request, res: Response) => {
   try {
@@ -116,8 +92,13 @@ export const getSubcategories = async (req: Request, res: Response) => {
       orderBy: { name: 'asc' },
     });
 
-    await setCache(cacheKey, subcategories, 3600);
-    res.status(200).json({ success: true, data: subcategories });
+    const signedSubcategories = await Promise.all(subcategories.map(async (sub: any) => ({
+      ...sub,
+      iconUrl: await getSignedAssetUrl(sub.iconUrl)
+    })));
+
+    await setCache(cacheKey, signedSubcategories, 3600);
+    res.status(200).json({ success: true, data: signedSubcategories });
   } catch (error) {
     console.error('Error fetching subcategories:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });

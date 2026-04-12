@@ -47,3 +47,30 @@ export const getPresignedUrl = async (key: string, expiresIn: number = 3600): Pr
 
   return await getSignedUrl(s3Client, command, { expiresIn });
 };
+
+/**
+ * Utility to process S3 keys and return valid URLs.
+ * Leaves regular http URLs intact.
+ */
+export const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
+  if (!url) return null;
+  // If it's already a full URL (including presigned params), skip
+  if (url.includes('X-Amz-Signature=')) return url;
+  
+  let key = url;
+  if (url.includes('.amazonaws.com/')) {
+    const parts = url.split('.amazonaws.com/');
+    if (parts.length > 1) {
+      key = parts[1];
+    }
+  }
+
+  if (!key || key.startsWith('http')) return url; // Fallback if we can't extract key
+
+  try {
+    return await getPresignedUrl(key, 3600); // 1 hour expiry
+  } catch (err) {
+    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
+    return null;
+  }
+};

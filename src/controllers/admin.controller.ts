@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
-import { getPresignedUrl, uploadFile } from '../services/s3.service';
+import { getPresignedUrl, uploadFile, getSignedAssetUrl } from '../services/s3.service';
 
 // Dashboard Stats
 export const getDashboardStats = async (req: Request, res: Response) => {
@@ -50,7 +50,13 @@ export const getCustomers = async (req: Request, res: Response) => {
         requests: true
       }
     });
-    res.status(200).json({ success: true, data: customers });
+    const signedCustomers = await Promise.all(customers.map(async (c: any) => {
+        if (c.profile?.profilePictureUrl) {
+            c.profile.profilePictureUrl = await getSignedAssetUrl(c.profile.profilePictureUrl);
+        }
+        return c;
+    }));
+    res.status(200).json({ success: true, data: signedCustomers });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
@@ -92,16 +98,20 @@ export const getSPs = async (req: Request, res: Response) => {
     });
 
     // 2. Batch process S3 signing (only for what's visible or useful)
-    const enrichedSPs = sps.map((sp: any) => {
+    const enrichedSPs = await Promise.all(sps.map(async (sp: any) => {
         const stats = spStatsMap[sp.id] || { sum: 0, count: 0 };
         sp.rating = stats.count > 0 ? Number((stats.sum / stats.count).toFixed(1)) : 0;
         sp.feedbackCount = stats.count;
 
-        // Optimization: Do not sign URLs here if you have 100+ SPs.
-        // Instead, the frontend should request a signed URL only when opening the detail drawer.
-        // But for now, let's keep it but skip if no URL exists.
+        if (sp.profile?.profilePictureUrl) {
+            sp.profile.profilePictureUrl = await getSignedAssetUrl(sp.profile.profilePictureUrl);
+        }
+        if (sp.spProfile?.aadharCardUrl) {
+            sp.spProfile.aadharCardUrl = await getSignedAssetUrl(sp.spProfile.aadharCardUrl);
+        }
+
         return sp;
-    });
+    }));
 
     res.status(200).json({ success: true, data: enrichedSPs });
   } catch (error) {
@@ -413,7 +423,13 @@ export const getAdmins = async (req: Request, res: Response) => {
             where: { role: 'ADMIN' },
             include: { profile: true }
         });
-        res.status(200).json({ success: true, data: admins });
+        const signedAdmins = await Promise.all(admins.map(async (admin: any) => {
+            if (admin.profile?.profilePictureUrl) {
+                admin.profile.profilePictureUrl = await getSignedAssetUrl(admin.profile.profilePictureUrl);
+            }
+            return admin;
+        }));
+        res.status(200).json({ success: true, data: signedAdmins });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Failed to fetch admins' });
     }

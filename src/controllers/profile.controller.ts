@@ -1,23 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { getCache, setCache, deleteCache } from '../services/redis.service';
-import { uploadFile, getPresignedUrl } from '../services/s3.service';
-
-// Helper to handle legacy full URLs and generate signed URLs
-const getAvatarUrl = async (url: string | null): Promise<string | null> => {
-  if (!url) return null;
-  // If it's already a full URL (legacy), extract the key
-  let key = url;
-  if (url.includes('.amazonaws.com/')) {
-    key = url.split('.amazonaws.com/')[1];
-  }
-  try {
-    return await getPresignedUrl(key, 3600); // 1 hour expiry
-  } catch (err) {
-    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
-    return null;
-  }
-};
+import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 
 // Cache profiles for 10 minutes (600 seconds)
 const PROFILE_CACHE_TTL = 600;
