@@ -5,23 +5,25 @@ import app from './app';
 
 const PORT = process.env.PORT || 3000;
 
-const getLocalIp = () => {
+const getLocalIps = () => {
   const interfaces = os.networkInterfaces();
+  const ips: string[] = [];
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]!) {
       if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+        ips.push(`${iface.address} (${name})`);
       }
     }
   }
-  return 'localhost';
+  return ips.length > 0 ? ips : ['localhost'];
 };
 
 app.listen(Number(PORT), '0.0.0.0', () => {
-  const localIp = getLocalIp();
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Listening on all interfaces (0.0.0.0) — reachable from mobile devices`);
-  console.log(`Production URL: https://api.specialnest.in/api/v1`);
-  console.log(`Mobile Connectivity (Internal): http://${localIp}:${PORT}/api/v1`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  const localIps = getLocalIps();
+  console.log(`\n🚀 [BACKEND] Server running on port ${PORT}`);
+  console.log(`📡 Listening on: 0.0.0.0 (All interfaces)`);
+  console.log(`🌍 External URLs for Mobile:`);
+  localIps.forEach(ip => console.log(`   👉 http://${ip.split(' ')[0]}:${PORT}/api/v1`));
+  console.log(`\n🔗 Production URL: https://api.specialnest.in/api/v1`);
+  console.log(`🛠️  Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });

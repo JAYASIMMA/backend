@@ -39,7 +39,16 @@ export const getCustomers = async (req: Request, res: Response) => {
       where: { role: 'CUSTOMER' },
       include: {
         profile: true,
-        addresses: true,
+        addresses: {
+          select: {
+            id: true,
+            addressLine: true,
+            city: true,
+            pincode: true,
+            label: true,
+            isDefault: true
+          }
+        },
         requests: true
       }
     });
@@ -112,7 +121,15 @@ export const getAllRequests = async (req: Request, res: Response) => {
         sp: { include: { profile: true } },
         category: true,
         subCategory: true,
-        location: true,
+        location: {
+          select: {
+            id: true,
+            addressLine: true,
+            city: true,
+            pincode: true,
+            label: true
+          }
+        },
         feedback: true
       },
       orderBy: { createdAt: 'desc' }

@@ -48,7 +48,20 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
     // Check profile completeness
     const userWithDetails = await prisma.user.findUnique({
       where: { id: user.id },
-      include: { profile: true, addresses: { take: 1 } },
+      include: { 
+        profile: true, 
+        addresses: { 
+          select: {
+            id: true,
+            addressLine: true,
+            pincode: true,
+            label: true,
+            city: true,
+            isDefault: true
+          },
+          take: 1 
+        } 
+      },
     });
     
     const isProfileComplete = !!(userWithDetails?.profile?.fullName && userWithDetails.addresses.length > 0);
@@ -117,8 +130,50 @@ export const loginPassword = async (req: Request, res: Response) => {
     );
 
     res.status(200).json({ success: true, token, role: user.role });
-  } catch (error) {
-    console.error('Password Login Error:', error);
+  } catch (error: any) {
+    console.error('❌ Password Login Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error',
+      debug: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};
+
+export const checkUserRole = async (req: Request, res: Response) => {
+  const { mobile } = req.body;
+
+  if (!mobile) {
+    return res.status(400).json({ success: false, message: 'Mobile number is required' });
+  }
+
+  try {
+    let mobileStr = mobile.toString().trim();
+    if (mobileStr.length === 10 && !mobileStr.startsWith('+')) {
+      mobileStr = `+91${mobileStr}`;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { mobile: mobileStr },
+      select: { role: true, mobile: true }
+    });
+
+    if (!user) {
+      return res.status(200).json({ 
+        success: true, 
+        exists: false, 
+        role: 'NONE' 
+      });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      exists: true, 
+      role: user.role 
+    });
+  } catch (error: any) {
+    console.error('❌ Check User Role Error:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };

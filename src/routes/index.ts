@@ -7,6 +7,7 @@ import * as categoryController from '../controllers/category.controller';
 import * as spController from '../controllers/sp.controller';
 import * as adminController from '../controllers/admin.controller';
 import * as customerController from '../controllers/customer.controller';
+import * as chatController from '../controllers/chat.controller';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 import { upload } from '../middleware/upload.middleware';
 
@@ -16,6 +17,7 @@ const router = express.Router();
 // Firebase Auth
 router.post('/auth/firebase-verify', authController.verifyFirebaseToken);
 router.post('/auth/login', authController.loginPassword);
+router.post('/auth/check-user', authController.checkUserRole);
 router.post('/auth/sp/signup', spController.signup);
 
 // Public Passport View (Global)
@@ -34,6 +36,10 @@ router.get('/bookings/history', authenticate, bookingController.getBookingHistor
 router.patch('/bookings/:id/status', authenticate, bookingController.updateBookingStatus);
 router.post('/bookings/:id/cancel', authenticate, bookingController.cancelBooking);
 router.post('/bookings/feedback', authenticate, authorize(['CUSTOMER']), bookingController.submitFeedback);
+
+// Chat Routes
+router.get('/chat/:requestId', authenticate, chatController.getMessages);
+router.post('/chat', authenticate, chatController.sendMessage);
 
 // Profile Routes
 router.get('/profile', authenticate, profileController.getProfile);

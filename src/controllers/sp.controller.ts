@@ -182,12 +182,11 @@ export const getBroadcasts = async (req: any, res: Response) => {
       JOIN "Address" a ON sr."locationId" = a.id
       JOIN "ServiceCategory" c ON sr."categoryId" = c.id
       WHERE sr.status = 'PENDING'
-      /* Temporarily disabled radius filter for development/testing visibility */
-      /* AND ST_DWithin(
+      AND ST_DWithin(
         a.coordinates,
         ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography,
         ${parseFloat(radius as string)}
-      ) */
+      )
       ${categoryName ? Prisma.sql`AND c.name ILIKE ${'%' + categoryName + '%'}` : Prisma.empty}
       ORDER BY sr."createdAt" DESC
     `;

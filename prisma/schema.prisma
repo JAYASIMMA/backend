@@ -5,7 +5,6 @@ generator client {
 
 datasource db {
   provider   = "postgresql"
-  url        = env("DATABASE_URL")
   extensions = [postgis]
 }
 
@@ -104,6 +103,17 @@ model ServiceRequest {
   location        Address                    @relation(fields: [locationId], references: [id])
   sp              User?                      @relation("SPRequests", fields: [spId], references: [id])
   subCategory     ServiceSubcategory?        @relation(fields: [subCategoryId], references: [id])
+  chatMessages    ChatMessage[]
+}
+
+model ChatMessage {
+  id              String         @id @default(uuid())
+  requestId       String
+  senderId        String
+  message         String
+  createdAt       DateTime       @default(now())
+  
+  serviceRequest  ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 }
 
 model Feedback {
