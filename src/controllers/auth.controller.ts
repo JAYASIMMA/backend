@@ -1,10 +1,8 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import * as admin from 'firebase-admin';
-
-const prisma = new PrismaClient();
 
 /**
  * Verify Firebase ID Token with our backend and generate a local JWT
@@ -77,7 +75,8 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
       success: true, 
       token, 
       isProfileComplete,
-      role: user.role 
+      role: user.role,
+      userId: user.id
     });
   } catch (error: any) {
     console.error('Firebase Auth Verification Error:', error);
@@ -129,7 +128,7 @@ export const loginPassword = async (req: Request, res: Response) => {
       { expiresIn: '7d' }
     );
 
-    res.status(200).json({ success: true, token, role: user.role });
+    res.status(200).json({ success: true, token, role: user.role, userId: user.id });
   } catch (error: any) {
     console.error('❌ Password Login Error:', error);
     res.status(500).json({ 

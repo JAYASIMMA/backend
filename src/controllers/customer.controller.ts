@@ -1,9 +1,7 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import * as s3Service from '../services/s3.service';
 import crypto from 'crypto';
-
-const prisma = new PrismaClient();
 
 /**
  * Complete customer profile setup after initial OTP verification

@@ -1,9 +1,7 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { getPresignedUrl, uploadFile } from '../services/s3.service';
-
-const prisma = new PrismaClient();
 
 // Dashboard Stats
 export const getDashboardStats = async (req: Request, res: Response) => {

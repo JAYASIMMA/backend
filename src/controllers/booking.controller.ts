@@ -1,8 +1,6 @@
 import { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { uploadFile, getPresignedUrl } from '../services/s3.service';
-
-const prisma = new PrismaClient();
 
 // Helper to handle legacy full URLs and generate signed URLs for both images and audio
 const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {

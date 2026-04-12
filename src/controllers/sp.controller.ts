@@ -1,10 +1,9 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import jwt from 'jsonwebtoken';
 import { getPresignedUrl } from '../services/s3.service';
-
-const prisma = new PrismaClient();
 
 const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
   if (!url) return null;

@@ -1,9 +1,7 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { getCache, setCache, deleteCache } from '../services/redis.service';
 import { getPresignedUrl, uploadFile } from '../services/s3.service';
-
-const prisma = new PrismaClient();
 const CATEGORIES_CACHE_KEY = 'service_categories';
 
 // Helper to handle legacy full URLs and generate signed URLs for icons
