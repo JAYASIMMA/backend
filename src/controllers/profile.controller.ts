@@ -17,7 +17,7 @@ export const getProfile = async (req: any, res: Response) => {
       console.log(`[Redis] Profile Cache Hit for userID: ${userId}`);
       const profile = JSON.parse(cachedData);
       // Still need to refresh signed URL periodically even if metadata is cached
-      profile.profilePictureUrl = await getAvatarUrl(profile.profilePictureUrl);
+      profile.profilePictureUrl = await getSignedAssetUrl(profile.profilePictureUrl);
       return res.status(200).json({ success: true, data: profile });
     }
 
@@ -53,7 +53,7 @@ export const getProfile = async (req: any, res: Response) => {
     await setCache(PROFILE_CACHE_KEY, profile, PROFILE_CACHE_TTL);
 
     // 4. Return with Signed URL
-    profile.profilePictureUrl = await getAvatarUrl(profile.profilePictureUrl);
+    profile.profilePictureUrl = await getSignedAssetUrl(profile.profilePictureUrl);
 
     res.status(200).json({ success: true, data: profile });
   } catch (error) {
@@ -94,7 +94,7 @@ export const updateProfile = async (req: any, res: Response) => {
     console.log(`[Redis] Profile Cache Invalidated for userID: ${userId}`);
 
     // Return with Signed URL for immediate UI update
-    const signedUrl = await getAvatarUrl(profilePictureUrl);
+    const signedUrl = await getSignedAssetUrl(profilePictureUrl);
     res.status(200).json({ 
       success: true, 
       message: 'Profile updated successfully', 
@@ -131,7 +131,7 @@ export const uploadProfilePicture = async (req: any, res: Response) => {
     await deleteCache(`profile:${userId}`);
 
     // Generate signed URL for response
-    const signedUrl = await getAvatarUrl(profilePictureUrl);
+    const signedUrl = await getSignedAssetUrl(profilePictureUrl);
 
     res.status(200).json({
       success: true,
