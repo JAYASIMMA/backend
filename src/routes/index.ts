@@ -8,6 +8,7 @@ import * as spController from '../controllers/sp.controller';
 import * as adminController from '../controllers/admin.controller';
 import * as customerController from '../controllers/customer.controller';
 import * as chatController from '../controllers/chat.controller';
+import * as healthController from '../controllers/health.controller';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 import { upload } from '../middleware/upload.middleware';
 
@@ -23,6 +24,10 @@ router.post('/auth/sp/signup', spController.signup);
 // Public Passport View (Global)
 router.get('/public/passport/:id', spController.getPublicPassport);
 router.get('/sp/:id/feedbacks', spController.getSPFeedbacks);
+
+// Diagnostic Routes
+router.get('/health', (req, res) => res.status(200).json({ status: 'OK' }));
+router.get('/debug/connections', healthController.checkConnections);
 
 // Location Routes (Customer only)
 router.get('/customer/addresses', authenticate, authorize(['CUSTOMER']), locationController.getAddresses);

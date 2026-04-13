@@ -353,7 +353,7 @@ export const updateAdminProfile = async (req: any, res: Response) => {
 // Update SP Account (Mobile, Password, etc)
 export const updateSPAccount = async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { mobile, password, fullName, bio, isVerified } = req.body;
+    const { mobile, password, fullName, bio, isVerified, categoryName, subCategoryName, address } = req.body;
 
     try {
         const userData: any = {};
@@ -389,22 +389,25 @@ export const updateSPAccount = async (req: Request, res: Response) => {
         }
 
         // 3. Update SP specific profile fields
-        if (bio !== undefined || isVerified !== undefined) {
+        if (bio !== undefined || isVerified !== undefined || categoryName || subCategoryName || address) {
             await prisma.serviceProviderProfile.upsert({
                 where: { userId: id },
                 update: { 
                     ...(bio !== undefined && { bio }),
-                    ...(isVerified !== undefined && { isVerified })
+                    ...(isVerified !== undefined && { isVerified }),
+                    ...(categoryName && { categoryName }),
+                    ...(subCategoryName && { subCategoryName }),
+                    ...(address && { address })
                 },
                 create: { 
                     userId: id, 
                     bio: bio || "", 
                     isVerified: !!isVerified,
                     aadharNumber: "0", 
-                    address: "N/A", 
+                    address: address || "N/A", 
                     aadharCardUrl: "", 
-                    categoryName: "N/A", 
-                    subCategoryName: "N/A" 
+                    categoryName: categoryName || "N/A", 
+                    subCategoryName: subCategoryName || "N/A" 
                 }
             });
         }

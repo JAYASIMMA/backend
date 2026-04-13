@@ -6,8 +6,17 @@ import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 // Cache profiles for 10 minutes (600 seconds)
 const PROFILE_CACHE_TTL = 600;
 
+/**
+ * Get User Profile
+ * Fetch from Redis first, then Database.
+ */
 export const getProfile = async (req: any, res: Response) => {
-  const userId = req.userId; // Corrected from req.user.userId
+  const userId = req.userId;
+  
+  if (!userId) {
+    return res.status(401).json({ success: false, message: 'Authentication required' });
+  }
+
   const PROFILE_CACHE_KEY = `profile:${userId}`;
 
   try {
@@ -16,8 +25,12 @@ export const getProfile = async (req: any, res: Response) => {
     if (cachedData) {
       console.log(`[Redis] Profile Cache Hit for userID: ${userId}`);
       const profile = JSON.parse(cachedData);
+      
       // Still need to refresh signed URL periodically even if metadata is cached
-      profile.profilePictureUrl = await getSignedAssetUrl(profile.profilePictureUrl);
+      if (profile.profilePictureUrl) {
+        profile.profilePictureUrl = await getSignedAssetUrl(profile.profilePictureUrl);
+      }
+      
       return res.status(200).json({ success: true, data: profile });
     }
 
@@ -42,29 +55,43 @@ export const getProfile = async (req: any, res: Response) => {
         profilePictureUrl: null,
         bio: '',
         user: {
-          mobile: '...', // We could fetch user mobile here if we wanted
+          mobile: '...',
           role: 'CUSTOMER'
         }
       };
       return res.status(200).json({ success: true, data: defaultProfile });
     }
 
-    // 3. Store in Redis (store the RAW KEY from DB)
+    // 3. Store in Redis (store the RAW KEY from DB, before signing)
     await setCache(PROFILE_CACHE_KEY, profile, PROFILE_CACHE_TTL);
 
     // 4. Return with Signed URL
-    profile.profilePictureUrl = await getSignedAssetUrl(profile.profilePictureUrl);
+    if (profile.profilePictureUrl) {
+      profile.profilePictureUrl = await getSignedAssetUrl(profile.profilePictureUrl);
+    }
 
     res.status(200).json({ success: true, data: profile });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching profile:', error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error',
+      debug: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    });
   }
 };
 
+/**
+ * Update User Profile
+ */
 export const updateProfile = async (req: any, res: Response) => {
-  const userId = req.userId; // Corrected from req.user.userId
-  const { fullName, profilePictureUrl, bio, aadharNumber } = req.body;
+  const userId = req.userId;
+  const { fullName } = req.body;
+  
+  if (!userId) {
+    return res.status(401).json({ success: false, message: 'Authentication required' });
+  }
+
   const PROFILE_CACHE_KEY = `profile:${userId}`;
 
   try {
@@ -75,17 +102,17 @@ export const updateProfile = async (req: any, res: Response) => {
       profilePictureUrl = await uploadFile(req.file, 'profiles');
     }
 
-    // 1. Update in PostgreSQL
+    // 1. Update/Upsert in PostgreSQL
     const profile = await prisma.profile.upsert({
       where: { userId },
       update: {
         fullName,
-        profilePictureUrl,
+        ...(profilePictureUrl && { profilePictureUrl }),
       },
       create: {
         userId,
         fullName,
-        profilePictureUrl,
+        profilePictureUrl: profilePictureUrl || "",
       },
     });
 
@@ -94,15 +121,23 @@ export const updateProfile = async (req: any, res: Response) => {
     console.log(`[Redis] Profile Cache Invalidated for userID: ${userId}`);
 
     // Return with Signed URL for immediate UI update
-    const signedUrl = await getSignedAssetUrl(profilePictureUrl);
+    const signedUrl = await getSignedAssetUrl(profile.profilePictureUrl);
+    
     res.status(200).json({ 
       success: true, 
       message: 'Profile updated successfully', 
-      data: { ...profile, profilePictureUrl: signedUrl } 
+      data: { 
+        ...profile, 
+        profilePictureUrl: signedUrl 
+      } 
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error updating profile:', error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error',
+      debug: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    });
   }
 };
 
@@ -113,6 +148,10 @@ export const uploadProfilePicture = async (req: any, res: Response) => {
   const userId = req.userId;
   const file = req.file;
 
+  if (!userId) {
+    return res.status(401).json({ success: false, message: 'Authentication required' });
+  }
+
   if (!file) {
     return res.status(400).json({ success: false, message: 'No file uploaded' });
   }
@@ -121,7 +160,7 @@ export const uploadProfilePicture = async (req: any, res: Response) => {
     const profilePictureUrl = await uploadFile(file, 'profiles');
 
     // Update in database
-    await prisma.profile.upsert({
+    const profile = await prisma.profile.upsert({
       where: { userId },
       update: { profilePictureUrl },
       create: { userId, profilePictureUrl },
@@ -137,9 +176,14 @@ export const uploadProfilePicture = async (req: any, res: Response) => {
       success: true,
       message: 'Profile picture uploaded successfully',
       url: signedUrl,
+      data: { ...profile, profilePictureUrl: signedUrl }
     });
   } catch (error: any) {
     console.error('S3 Upload Error:', error);
-    res.status(500).json({ success: false, message: 'Failed to upload to S3', debug: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to upload to S3', 
+      debug: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    });
   }
 };

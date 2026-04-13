@@ -35,7 +35,8 @@ const getSignedAssetUrl = async (url: string | null): Promise<string | null> => 
  * Worker Signup (Registration)
  */
 export const signup = async (req: Request, res: Response) => {
-  const { mobile, password, fullName, aadharNumber, categoryName, subCategoryName, address, bio } = req.body;
+  const { mobile, password, fullName, aadharNumber, categoryName, subCategoryName, specialty, address, bio } = req.body;
+  const finalSubCategory = subCategoryName || specialty;
 
   if (!mobile || !password || !fullName) {
     return res.status(400).json({ success: false, message: 'Mobile, password, and full name are required' });
@@ -81,7 +82,7 @@ export const signup = async (req: Request, res: Response) => {
           address,
           bio,
           categoryName,
-          subCategoryName,
+          subCategoryName: finalSubCategory,
           isVerified: false, 
         },
       });
