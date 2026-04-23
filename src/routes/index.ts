@@ -33,7 +33,6 @@ router.get('/debug/connections', healthController.checkConnections);
 router.get('/customer/addresses', authenticate, authorize(['CUSTOMER']), locationController.getAddresses);
 router.post('/customer/addresses', authenticate, authorize(['CUSTOMER']), locationController.createAddress);
 router.put('/customer/addresses/:id/default', authenticate, authorize(['CUSTOMER']), locationController.setDefaultAddress);
-router.delete('/customer/addresses/:id', authenticate, authorize(['CUSTOMER']), locationController.deleteAddress);
 
 // Booking Routes
 router.post('/bookings', authenticate, authorize(['CUSTOMER']), upload.single('audio'), bookingController.createBooking);
