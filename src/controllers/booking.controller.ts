@@ -280,7 +280,8 @@ export const getBookingHistory = async (req: any, res: Response) => {
 };
 
 export const submitFeedback = async (req: any, res: Response) => {
-  const { requestId, rating, comment } = req.body;
+  const requestId = req.params.requestId || req.body.requestId;
+  const { rating, comment } = req.body;
 
   if (!requestId || !rating) {
     return res.status(400).json({ success: false, message: 'Request ID and Rating are required' });
