@@ -298,8 +298,13 @@ export const submitFeedback = async (req: any, res: Response) => {
   }
 
   try {
-    const feedback = await prisma.feedback.create({
-      data: {
+    const feedback = await prisma.feedback.upsert({
+      where: { requestId },
+      update: {
+        rating: parseInt(rating),
+        comment: comment || null,
+      },
+      create: {
         requestId,
         rating: parseInt(rating),
         comment: comment || null,
