@@ -132,11 +132,17 @@ export const updateBookingStatus = async (req: any, res: Response) => {
       if (status === 'ACCEPTED' && booking.status === 'PENDING') {
         // When SP accepts, generate a 4-digit numeric startOtp
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
-        await prisma.serviceRequest.update({
-          where: { id },
-          data: { status, spId: req.userId, startOtp },
-        });
-        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}`);
+        await prisma.$transaction([
+          prisma.serviceRequest.update({
+            where: { id },
+            data: { status, spId: req.userId, startOtp },
+          }),
+          prisma.serviceProviderProfile.update({
+            where: { userId: req.userId },
+            data: { dutyStatus: false } as any
+          })
+        ]);
+        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}. Duty Status: OFF`);
       } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
         // This is the stage where the worker arrives and asks for the START PIN
         // FALLBACK: Generate startOtp if missing
@@ -169,10 +175,17 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         if (otp !== booking.completionOtp) {
           return res.status(400).json({ success: false, message: 'Invalid completion matching PIN' });
         }
-        await prisma.serviceRequest.update({
-          where: { id },
-          data: { status },
-        });
+        await prisma.$transaction([
+          prisma.serviceRequest.update({
+            where: { id },
+            data: { status },
+          }),
+          prisma.serviceProviderProfile.update({
+            where: { userId: booking.spId! },
+            data: { dutyStatus: true } as any
+          })
+        ]);
+        console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: ON`);
       }
     }
 
@@ -236,6 +249,12 @@ export const cancelBooking = async (req: any, res: Response) => {
           spId: req.role === 'SP' ? req.userId : null,
         },
       }),
+      ...(booking.spId ? [
+        prisma.serviceProviderProfile.update({
+          where: { userId: booking.spId },
+          data: { dutyStatus: true } as any
+        })
+      ] : [])
     ]);
 
     res.status(200).json({ success: true, message: 'Booking cancelled' });

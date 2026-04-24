@@ -57,6 +57,7 @@ router.post('/customer/setup-profile', authenticate, authorize(['CUSTOMER']), up
 router.get('/sp/stats', authenticate, authorize(['SP']), spController.getDashboardStats);
 router.get('/sp/history', authenticate, authorize(['SP']), spController.getServiceHistory);
 router.get('/sp/broadcasts', authenticate, authorize(['SP']), spController.getBroadcasts);
+router.patch('/sp/duty-status', authenticate, authorize(['SP']), spController.updateDutyStatus);
 
 // Auth Routes
 // ...

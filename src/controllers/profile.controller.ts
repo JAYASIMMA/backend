@@ -43,6 +43,7 @@ export const getProfile = async (req: any, res: Response) => {
           select: {
             mobile: true,
             role: true,
+            spProfile: true,
           },
         },
       },

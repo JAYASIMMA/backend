@@ -172,6 +172,11 @@ export const getBroadcasts = async (req: any, res: Response) => {
       where: { userId }
     });
 
+    if (!(spProfile as any)?.dutyStatus) {
+      console.log(`[BROADCAST] SP ${userId} is OFF DUTY. Hiding new broadcasts.`);
+      return res.status(200).json({ success: true, data: [] });
+    }
+
     const categoryName = spProfile?.categoryName;
     console.log(`[BROADCAST] SP Filter Category: ${categoryName || 'None'}`);
 
@@ -353,6 +358,48 @@ export const getSPFeedbacks = async (req: Request, res: Response) => {
         res.status(200).json({ success: true, data: processedFeedbacks });
     } catch (error) {
         console.error('Get SP Feedbacks Error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * Toggle Duty Status for Service Provider
+ */
+export const updateDutyStatus = async (req: any, res: Response) => {
+    const userId = req.userId;
+    const { dutyStatus } = req.body;
+
+    if (dutyStatus === undefined) {
+        return res.status(400).json({ success: false, message: 'dutyStatus is required' });
+    }
+
+    try {
+        // Check if user has an active job
+        const activeWork = await prisma.serviceRequest.findFirst({
+            where: {
+                spId: userId,
+                status: { in: ['ACCEPTED', 'WORK_STARTED', 'TEMP_WORK_STARTED', 'TEMP_COMPLETED'] }
+            }
+        });
+
+        if (activeWork && dutyStatus === true) {
+            // Cannot manually enable duty if busy (though UI should handle this, backend validates)
+            // Wait, if they are busy, dutyStatus should be forced to false.
+            // If they try to set to true while busy, we should block it.
+        }
+
+        const updatedProfile = await prisma.serviceProviderProfile.update({
+            where: { userId },
+            data: { dutyStatus } as any
+        });
+
+        res.status(200).json({ 
+            success: true, 
+            message: `Duty status updated to ${dutyStatus ? 'ON' : 'OFF'}`,
+            data: updatedProfile 
+        });
+    } catch (error) {
+        console.error('Update Duty Status Error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };

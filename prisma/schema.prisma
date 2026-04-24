@@ -45,6 +45,7 @@ model ServiceProviderProfile {
   isVerified      Boolean @default(false)
   latitude        Float?
   longitude       Float?
+  dutyStatus      Boolean @default(true)
   user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
