@@ -214,6 +214,15 @@ export const cancelBooking = async (req: any, res: Response) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
 
+    // Cancellation Policy: Cannot cancel once work has officially started OR once the worker has arrived (TEMP_WORK_STARTED)
+    const nonCancellableStatuses = ['TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED', 'COMPLETED', 'CANCELLED'];
+    if (nonCancellableStatuses.includes(booking.status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Booking cannot be cancelled in its current state: ${booking.status}` 
+      });
+    }
+
     await prisma.$transaction([
       prisma.serviceRequest.update({
         where: { id },
@@ -254,6 +263,7 @@ export const getBookingHistory = async (req: any, res: Response) => {
           include: { profile: true }
         },
         feedback: true,
+        cancellation: true,
       },
       orderBy: { updatedAt: 'desc' },
     });
