@@ -7,8 +7,8 @@ import crypto from 'crypto';
  * Complete customer profile setup after initial OTP verification
  */
 export const setupProfile = async (req: any, res: Response) => {
-  const { fullName, addressLine, city, pincode, initial } = req.body;
-  const userId = req.userId; // Corrected from req.user.userId
+  const { fullName, addressLine, city, pincode, initial, lat, lng } = req.body;
+  const userId = req.userId;
 
   if (!fullName || !addressLine || !pincode) {
     return res.status(400).json({ success: false, message: 'Required fields are missing' });
@@ -40,12 +40,10 @@ export const setupProfile = async (req: any, res: Response) => {
       });
 
       // 2. Create Address using Raw SQL for PostGIS field
-      // Prisma's "Unsupported" fields for PostGIS MUST be handled via raw queries
-      // This solves the "list type list is not configured as a subtype of type pg" error
-      // which occurs when Prisma tries to map the ST_GeogFromText results incorrectly.
-      
       const addressId = crypto.randomUUID();
-      const currentCity = city || 'Chennai';
+      const currentCity = city || 'City';
+      const latitude = lat ? parseFloat(lat) : 13.0827; // Fallback to Chennai if truly missing
+      const longitude = lng ? parseFloat(lng) : 80.2707;
       
       await tx.$executeRaw`
         INSERT INTO "Address" (id, "customerId", label, "addressLine", city, pincode, coordinates, "isDefault", "updatedAt")
@@ -56,7 +54,7 @@ export const setupProfile = async (req: any, res: Response) => {
           ${addressLine}, 
           ${currentCity}, 
           ${pincode}, 
-          ST_GeographyFromText('POINT(80.2707 13.0827)'), 
+          ST_GeographyFromText(${`POINT(${longitude} ${latitude})`}), 
           true, 
           NOW()
         )

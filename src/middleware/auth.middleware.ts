@@ -24,6 +24,7 @@ export const authenticate = async (req: any, res: Response, next: NextFunction) 
       });
 
       if (!user) {
+        console.warn(`[AUTH] Firebase sync failure: Phone ${decodedFirebase.phone_number} not in DB`);
         return res.status(401).json({ success: false, message: 'User not synchronized with backend' });
       }
 
@@ -31,15 +32,25 @@ export const authenticate = async (req: any, res: Response, next: NextFunction) 
       req.role = user.role;
       req.firebaseUser = decodedFirebase;
       return next();
-    } catch (fbError) {
+    } catch (fbError: any) {
       // 2. Fallback to our local JWT (signed by our backend)
-      const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-      req.userId = decoded.userId;
-      req.role = decoded.role;
-      next();
+      // Only try local JWT if it doesn't look like an expired Firebase token
+      if (fbError.code === 'auth/id-token-expired') {
+          throw fbError; // Re-throw to be caught by outer catch and returned as 401
+      }
+
+      try {
+          const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+          req.userId = decoded.userId;
+          req.role = decoded.role;
+          return next();
+      } catch (jwtError) {
+          console.error('[AUTH] All verification methods failed');
+          throw jwtError;
+      }
     }
-  } catch (error) {
-    console.error('Auth Middleware Error:', error);
+  } catch (error: any) {
+    console.error('Auth Middleware Error:', error.message);
     return res.status(401).json({ success: false, message: 'Invalid or expired token' });
   }
 };

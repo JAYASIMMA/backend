@@ -529,18 +529,6 @@ export const deleteAdmin = async (req: any, res: Response) => {
     }
 };
 
-const getAvatarUrl = async (url: string | null): Promise<string | null> => {
-    if (!url) return null;
-    let key = url;
-    if (url.includes('.amazonaws.com/')) {
-      key = url.split('.amazonaws.com/')[1];
-    }
-    try {
-      return await getPresignedUrl(key, 3600);
-    } catch (err) {
-      return null;
-    }
-};
 
 export const uploadAdminAsset = async (req: any, res: Response) => {
     try {
@@ -548,7 +536,7 @@ export const uploadAdminAsset = async (req: any, res: Response) => {
             return res.status(400).json({ success: false, message: 'No file provided' });
         }
         const key = await uploadFile(req.file, 'admin-assets');
-        const signedUrl = await getAvatarUrl(key);
+        const signedUrl = await getSignedAssetUrl(key);
         res.status(200).json({ success: true, url: signedUrl, key });
     } catch (error) {
         console.error('Admin Upload Error:', error);

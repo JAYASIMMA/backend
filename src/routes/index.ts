@@ -58,6 +58,7 @@ router.get('/sp/stats', authenticate, authorize(['SP']), spController.getDashboa
 router.get('/sp/history', authenticate, authorize(['SP']), spController.getServiceHistory);
 router.get('/sp/broadcasts', authenticate, authorize(['SP']), spController.getBroadcasts);
 router.patch('/sp/duty-status', authenticate, authorize(['SP']), spController.updateDutyStatus);
+router.patch('/sp/live-location', authenticate, authorize(['SP']), spController.updateLiveLocation);
 
 // Auth Routes
 // ...

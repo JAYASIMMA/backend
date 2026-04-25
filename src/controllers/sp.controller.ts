@@ -3,33 +3,8 @@ import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import jwt from 'jsonwebtoken';
-import { getPresignedUrl } from '../services/s3.service';
+import { getPresignedUrl, getSignedAssetUrl } from '../services/s3.service';
 
-const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
-  if (!url) return null;
-  // If it's already a full URL (including presigned params), skip
-  if (url.includes('X-Amz-Signature=')) return url;
-  
-  let key = url;
-  if (url.includes('.amazonaws.com/')) {
-    const parts = url.split('.amazonaws.com/');
-    if (parts.length > 1) {
-      key = parts[1];
-    }
-  }
-
-  if (!key || key.startsWith('http')) {
-      // If we couldn't extract a reliable key, return null instead of crashing
-      return null;
-  }
-
-  try {
-    return await getPresignedUrl(key, 3600);
-  } catch (err) {
-    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
-    return null;
-  }
-};
 
 /**
  * Worker Signup (Registration)
@@ -43,40 +18,70 @@ export const signup = async (req: Request, res: Response) => {
   }
 
   try {
-    const mobileStr = mobile.toString();
+    let mobileStr = mobile.toString().trim();
+    
+    // Normalize: If 10 digits, assume +91 prefix
+    if (mobileStr.length === 10 && !mobileStr.startsWith('+')) {
+      mobileStr = `+91${mobileStr}`;
+    }
 
     // Check if user already exists
     const existingUser = await prisma.user.findUnique({
       where: { mobile: mobileStr },
     });
 
-    if (existingUser) {
-      return res.status(400).json({ success: false, message: 'A user with this mobile number already exists' });
+    if (existingUser && existingUser.role === 'SP') {
+      return res.status(400).json({ success: false, message: 'A Service Provider with this mobile number already exists.' });
     }
 
     // Hash password
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // Create User, Profile, and ServiceProviderProfile in a transaction
+    // Create or Update User, Profile, and ServiceProviderProfile in a transaction
     const newUser = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          mobile: mobileStr,
-          role: 'SP',
-          passwordHash,
-        },
-      });
+      let user;
+      
+      if (existingUser) {
+        // Upgrade existing CUSTOMER to SP
+        user = await tx.user.update({
+          where: { id: existingUser.id },
+          data: {
+            role: 'SP',
+            passwordHash,
+          },
+        });
+      } else {
+        // Create new SP
+        user = await tx.user.create({
+          data: {
+            mobile: mobileStr,
+            role: 'SP',
+            passwordHash,
+          },
+        });
+      }
 
-      await tx.profile.create({
-        data: {
+      await tx.profile.upsert({
+        where: { userId: user.id },
+        update: { fullName },
+        create: {
           userId: user.id,
           fullName,
         },
       });
 
-      await tx.serviceProviderProfile.create({
-        data: {
+      await tx.serviceProviderProfile.upsert({
+        where: { userId: user.id },
+        update: {
+          aadharNumber,
+          address,
+          bio,
+          categoryName,
+          subCategoryName: finalSubCategory,
+          isVerified: false, 
+        },
+        create: {
           userId: user.id,
           aadharNumber,
           address,
@@ -101,6 +106,7 @@ export const signup = async (req: Request, res: Response) => {
       success: true,
       token,
       role: newUser.role,
+      userId: newUser.id
     });
   } catch (error: any) {
     console.error('Worker Signup Error:', error);
@@ -125,6 +131,13 @@ export const getPublicPassport = async (req: Request, res: Response) => {
 
     if (!sp || sp.role !== 'SP') {
       return res.status(404).json({ success: false, message: 'Service Provider not found' });
+    }
+
+    if (sp.profile) {
+      sp.profile.profilePictureUrl = await getSignedAssetUrl(sp.profile.profilePictureUrl);
+    }
+    if (sp.spProfile) {
+      sp.spProfile.aadharCardUrl = await getSignedAssetUrl(sp.spProfile.aadharCardUrl);
     }
 
     res.status(200).json({ success: true, data: sp });
@@ -155,16 +168,16 @@ export const getBroadcasts = async (req: any, res: Response) => {
   console.log('---------------------------------------------------------');
 
   try {
-    // 0. Check if SP has any active WORK_STARTED job.
+    // 0. Check if SP has any active work (Accepted, Started, or Pending Completion)
     const activeWork = await prisma.serviceRequest.findFirst({
       where: {
         spId: userId,
-        status: { in: ['WORK_STARTED', 'TEMP_WORK_STARTED', 'TEMP_COMPLETED'] }
+        status: { in: ['ACCEPTED', 'WORK_STARTED', 'TEMP_WORK_STARTED', 'TEMP_COMPLETED'] }
       }
     });
 
     if (activeWork) {
-      console.log(`[BROADCAST] SP ${userId} is busy with job ${activeWork.id}. Hiding new broadcasts.`);
+      console.log(`[BROADCAST] SP ${userId} is currently AT WORK (Status: ${activeWork.status}). Hiding new broadcasts.`);
       return res.status(200).json({ success: true, data: [] });
     }
 
@@ -172,31 +185,63 @@ export const getBroadcasts = async (req: any, res: Response) => {
       where: { userId }
     });
 
-    if (!(spProfile as any)?.dutyStatus) {
-      console.log(`[BROADCAST] SP ${userId} is OFF DUTY. Hiding new broadcasts.`);
+    const dutyStatus = (spProfile as any)?.dutyStatus ?? true;
+    console.log(`[BROADCAST] SP ${userId} | Duty Status: ${dutyStatus ? 'AVAILABLE (True)' : 'BUSY/OFF DUTY (False)'}`);
+
+    if (!dutyStatus) {
       return res.status(200).json({ success: true, data: [] });
     }
+    const radiusMeters = parseFloat(radius as string) || 500000; // Increased default to 500km for testing
+    
+    const categoryName = spProfile?.categoryName?.trim();
+    const subCategoryName = spProfile?.subCategoryName?.trim();
+    
+    console.log(`[BROADCAST] Filtering for: Category="${categoryName || 'All'}", SubCategory="${subCategoryName || 'All'}"`);
 
-    const categoryName = spProfile?.categoryName;
-    console.log(`[BROADCAST] SP Filter Category: ${categoryName || 'None'}`);
-
-    // Construct query using Prisma.sql to handle conditional ILIKE safely
+    // Construct query using Prisma.sql
+    // We join both Category and SubCategory to ensure we match correctly
+    // We use ::geography for accurate distance search in meters
     const query = Prisma.sql`
-      SELECT sr.*, a."addressLine", a.label, c.name as "categoryName"
+      SELECT 
+        sr.*, 
+        a."addressLine", 
+        a.label, 
+        c.name as "categoryName", 
+        sc.name as "subCategoryName",
+        ST_Distance(
+          a.coordinates::geography, 
+          ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography
+        ) as distance_meters
       FROM "ServiceRequest" sr
       JOIN "Address" a ON sr."locationId" = a.id
       JOIN "ServiceCategory" c ON sr."categoryId" = c.id
+      LEFT JOIN "ServiceSubcategory" sc ON sr."subCategoryId" = sc.id
       WHERE sr.status = 'PENDING'
       AND ST_DWithin(
-        a.coordinates,
-        ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography,
-        ${parseFloat(radius as string)}
+        a.coordinates::geography, 
+        ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography, 
+        ${radiusMeters}
       )
-      ${categoryName ? Prisma.sql`AND c.name ILIKE ${'%' + categoryName + '%'}` : Prisma.empty}
-      ORDER BY sr."createdAt" DESC
+      ${(categoryName || subCategoryName) ? Prisma.sql`
+        AND (
+          ${categoryName ? Prisma.sql`(c.name ILIKE ${'%' + categoryName + '%'} OR ${categoryName} ILIKE CONCAT('%', c.name, '%'))` : Prisma.empty}
+          ${(categoryName && subCategoryName) ? Prisma.sql` OR ` : Prisma.empty}
+          ${subCategoryName ? Prisma.sql`(sc.name ILIKE ${'%' + subCategoryName + '%'} OR ${subCategoryName} ILIKE CONCAT('%', sc.name, '%') OR c.name ILIKE ${'%' + subCategoryName + '%'})` : Prisma.empty}
+        )
+      ` : Prisma.empty}
+      ORDER BY distance_meters ASC
     `;
 
     const requests: any[] = await prisma.$queryRaw(query);
+    
+    if (requests.length > 0) {
+      console.log(`[BROADCAST] Found ${requests.length} matches within ${radiusMeters}m`);
+      requests.forEach(r => {
+        console.log(` -> Mission ${r.id.substring(0,8)}: ${r.categoryName}/${r.subCategoryName} at ${Math.round(r.distance_meters/1000)}km`);
+      });
+    } else {
+      console.log(`[BROADCAST] Found 0 missions for SP ${userId} within ${radiusMeters}m`);
+    }
 
     // Sign the audio URLs
     const processedRequests = await Promise.all(requests.map(async (r: any) => {
@@ -206,7 +251,7 @@ export const getBroadcasts = async (req: any, res: Response) => {
       };
     }));
 
-      res.status(200).json({ success: true, data: processedRequests });
+    res.status(200).json({ success: true, data: processedRequests });
     } catch (error: any) {
       console.error('[SP_CONTROLLER] getBroadcasts FATAL ERROR:', error);
       res.status(500).json({ 
@@ -263,13 +308,19 @@ export const getDashboardStats = async (req: any, res: Response) => {
             ? (feedbacks.reduce((sum, f) => sum + (f.rating || 5), 0) / feedbacks.length).toFixed(1)
             : "5.0";
 
+        const spProfile = await prisma.serviceProviderProfile.findUnique({
+            where: { userId },
+            select: { dutyStatus: true }
+        });
+
         res.status(200).json({
             success: true,
             data: {
                 immediate: immediateTasks,
                 later: queueTasks,
                 totalCompleted,
-                rating: parseFloat(avgRating)
+                rating: parseFloat(avgRating),
+                dutyStatus: spProfile?.dutyStatus ?? true
             }
         });
     } catch (error) {
@@ -383,9 +434,11 @@ export const updateDutyStatus = async (req: any, res: Response) => {
         });
 
         if (activeWork && dutyStatus === true) {
-            // Cannot manually enable duty if busy (though UI should handle this, backend validates)
-            // Wait, if they are busy, dutyStatus should be forced to false.
-            // If they try to set to true while busy, we should block it.
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Cannot set status to available while you have an active mission.',
+                debug: 'Active work detected, dutyStatus must remain false.'
+            });
         }
 
         const updatedProfile = await prisma.serviceProviderProfile.update({
@@ -400,6 +453,33 @@ export const updateDutyStatus = async (req: any, res: Response) => {
         });
     } catch (error) {
         console.error('Update Duty Status Error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * Update Live Location for Service Provider (Real-time tracking)
+ */
+export const updateLiveLocation = async (req: any, res: Response) => {
+    const userId = req.userId;
+    const { lat, lng } = req.body;
+
+    if (lat === undefined || lng === undefined) {
+        return res.status(400).json({ success: false, message: 'Latitude and Longitude are required' });
+    }
+
+    try {
+        await prisma.serviceProviderProfile.update({
+            where: { userId },
+            data: { 
+                latitude: parseFloat(lat),
+                longitude: parseFloat(lng)
+            } as any
+        });
+
+        res.status(200).json({ success: true, message: 'Location updated' });
+    } catch (error) {
+        console.error('Update Live Location Error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };

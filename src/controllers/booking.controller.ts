@@ -1,22 +1,6 @@
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
-import { uploadFile, getPresignedUrl } from '../services/s3.service';
-
-// Helper to handle legacy full URLs and generate signed URLs for both images and audio
-const getSignedAssetUrl = async (url: string | null): Promise<string | null> => {
-  if (!url) return null;
-  // If it's already a full URL (legacy), extract the key
-  let key = url;
-  if (url.includes('.amazonaws.com/')) {
-    key = url.split('.amazonaws.com/')[1];
-  }
-  try {
-    return await getPresignedUrl(key, 3600); // 1 hour expiry
-  } catch (err) {
-    console.error(`[S3] Failed to sign URL for key: ${key}`, err);
-    return null;
-  }
-};
+import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 
 export const createBooking = async (req: any, res: Response) => {
   let { categoryId, subCategoryId, locationId, messageText, audioMessageUrl, scheduledAt } = req.body;
@@ -85,16 +69,33 @@ export const getActiveBookings = async (req: any, res: Response) => {
           include: { profile: true }
         },
         sp: {
-          include: { profile: true }
+          include: { 
+            profile: true,
+            spProfile: true 
+          }
         }
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    // Process URLs for each booking
+    // Process URLs and fetch coordinates for each booking
     const processedBookings = await Promise.all(bookings.map(async (b: any) => {
+      // Fetch coordinates for the location
+      const coords: any[] = await prisma.$queryRaw`
+        SELECT ST_X(coordinates::geometry) as lng, ST_Y(coordinates::geometry) as lat 
+        FROM "Address" 
+        WHERE id = ${b.locationId}
+      `;
+      
+      const locationWithCoords = b.location ? {
+        ...b.location,
+        latitude: coords[0]?.lat,
+        longitude: coords[0]?.lng
+      } : null;
+
       return {
         ...b,
+        location: locationWithCoords,
         audioMessageUrl: await getSignedAssetUrl(b.audioMessageUrl),
         sp: b.sp ? {
           ...b.sp,
@@ -195,7 +196,12 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         category: true,
         location: true,
         customer: { include: { profile: true } },
-        sp: { include: { profile: true } }
+        sp: { 
+          include: { 
+            profile: true,
+            spProfile: true
+          } 
+        }
       }
     });
 

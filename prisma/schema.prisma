@@ -98,6 +98,7 @@ model ServiceRequest {
   scheduledAt     DateTime?
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
+  chatMessages    ChatMessage[]
   feedback        Feedback?
   cancellation    RequestCancellationReason?
   category        ServiceCategory            @relation(fields: [categoryId], references: [id])
@@ -105,17 +106,15 @@ model ServiceRequest {
   location        Address                    @relation(fields: [locationId], references: [id])
   sp              User?                      @relation("SPRequests", fields: [spId], references: [id])
   subCategory     ServiceSubcategory?        @relation(fields: [subCategoryId], references: [id])
-  chatMessages    ChatMessage[]
 }
 
 model ChatMessage {
-  id              String         @id @default(uuid())
-  requestId       String
-  senderId        String
-  message         String
-  createdAt       DateTime       @default(now())
-  
-  serviceRequest  ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  id             String         @id @default(uuid())
+  requestId      String
+  senderId       String
+  message        String
+  createdAt      DateTime       @default(now())
+  serviceRequest ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 }
 
 model Feedback {
