@@ -185,7 +185,7 @@ export const getBroadcasts = async (req: any, res: Response) => {
       where: { userId }
     });
 
-    const dutyStatus = spProfile?.dutyStatus ?? true;
+    const dutyStatus = (spProfile as any)?.dutyStatus ?? true;
     console.log(`[BROADCAST] SP ${userId} | Duty Status: ${dutyStatus ? 'AVAILABLE (True)' : 'BUSY/OFF DUTY (False)'}`);
 
     if (!dutyStatus) {
@@ -316,7 +316,7 @@ export const getDashboardStats = async (req: any, res: Response) => {
 
         const spProfile = await prisma.serviceProviderProfile.findUnique({
             where: { userId },
-            select: { dutyStatus: true }
+            select: { dutyStatus: true } as any
         });
 
         res.status(200).json({
@@ -326,7 +326,7 @@ export const getDashboardStats = async (req: any, res: Response) => {
                 later: queueTasks,
                 totalCompleted,
                 rating: parseFloat(avgRating),
-                dutyStatus: spProfile?.dutyStatus ?? true
+                dutyStatus: (spProfile as any)?.dutyStatus ?? true
             }
         });
     } catch (error) {
@@ -449,7 +449,7 @@ export const updateDutyStatus = async (req: any, res: Response) => {
 
         const updatedProfile = await prisma.serviceProviderProfile.update({
             where: { userId },
-            data: { dutyStatus }
+            data: { dutyStatus } as any
         });
 
         res.status(200).json({ 
@@ -502,7 +502,7 @@ export const rejectBroadcast = async (req: any, res: Response) => {
     }
 
     try {
-        await prisma.serviceRequestRejection.upsert({
+        await (prisma as any).serviceRequestRejection.upsert({
             where: {
                 requestId_spId: {
                     requestId,
