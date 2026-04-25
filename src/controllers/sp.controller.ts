@@ -217,6 +217,12 @@ export const getBroadcasts = async (req: any, res: Response) => {
       JOIN "ServiceCategory" c ON sr."categoryId" = c.id
       LEFT JOIN "ServiceSubcategory" sc ON sr."subCategoryId" = sc.id
       WHERE sr.status = 'PENDING'
+      -- Exclude requests rejected by THIS SP
+      AND NOT EXISTS (
+        SELECT 1 FROM "ServiceRequestRejection" srr 
+        WHERE srr."requestId" = sr.id 
+        AND srr."spId" = ${userId}
+      )
       AND ST_DWithin(
         a.coordinates::geography, 
         ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography, 
@@ -480,6 +486,39 @@ export const updateLiveLocation = async (req: any, res: Response) => {
         res.status(200).json({ success: true, message: 'Location updated' });
     } catch (error) {
         console.error('Update Live Location Error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * Reject a Broadcast (Will never show again for this SP)
+ */
+export const rejectBroadcast = async (req: any, res: Response) => {
+    const userId = req.userId;
+    const { requestId } = req.body;
+
+    if (!requestId) {
+        return res.status(400).json({ success: false, message: 'Request ID is required' });
+    }
+
+    try {
+        await prisma.serviceRequestRejection.upsert({
+            where: {
+                requestId_spId: {
+                    requestId,
+                    spId: userId
+                }
+            },
+            update: {},
+            create: {
+                requestId,
+                spId: userId
+            }
+        });
+
+        res.status(200).json({ success: true, message: 'Mission rejected' });
+    } catch (error) {
+        console.error('Reject Broadcast Error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
