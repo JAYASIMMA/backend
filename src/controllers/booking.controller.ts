@@ -140,7 +140,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }),
           prisma.serviceProviderProfile.update({
             where: { userId: req.userId },
-            data: { dutyStatus: false } as any
+            data: { dutyStatus: false }
           })
         ]);
         console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}. Duty Status: OFF`);
@@ -183,7 +183,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }),
           prisma.serviceProviderProfile.update({
             where: { userId: booking.spId! },
-            data: { dutyStatus: true } as any
+            data: { dutyStatus: true }
           })
         ]);
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: ON`);
@@ -258,7 +258,7 @@ export const cancelBooking = async (req: any, res: Response) => {
       ...(booking.spId ? [
         prisma.serviceProviderProfile.update({
           where: { userId: booking.spId },
-          data: { dutyStatus: true } as any
+          data: { dutyStatus: true }
         })
       ] : [])
     ]);

@@ -185,7 +185,7 @@ export const getBroadcasts = async (req: any, res: Response) => {
       where: { userId }
     });
 
-    const dutyStatus = (spProfile as any)?.dutyStatus ?? true;
+    const dutyStatus = spProfile?.dutyStatus ?? true;
     console.log(`[BROADCAST] SP ${userId} | Duty Status: ${dutyStatus ? 'AVAILABLE (True)' : 'BUSY/OFF DUTY (False)'}`);
 
     if (!dutyStatus) {
@@ -449,7 +449,7 @@ export const updateDutyStatus = async (req: any, res: Response) => {
 
         const updatedProfile = await prisma.serviceProviderProfile.update({
             where: { userId },
-            data: { dutyStatus } as any
+            data: { dutyStatus }
         });
 
         res.status(200).json({ 
