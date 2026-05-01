@@ -23,6 +23,7 @@ model User {
   spProfile       ServiceProviderProfile?
   requests        ServiceRequest[]            @relation("CustomerRequests")
   spRequests      ServiceRequest[]            @relation("SPRequests")
+  rejections      ServiceRequestRejection[]
 }
 
 model Profile {
@@ -106,6 +107,7 @@ model ServiceRequest {
   location        Address                    @relation(fields: [locationId], references: [id])
   sp              User?                      @relation("SPRequests", fields: [spId], references: [id])
   subCategory     ServiceSubcategory?        @relation(fields: [subCategoryId], references: [id])
+  rejections      ServiceRequestRejection[]
 }
 
 model ChatMessage {
@@ -146,6 +148,18 @@ model OtpRecord {
   expiresAt DateTime
   used      Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+model ServiceRequestRejection {
+  id        String   @id @default(uuid())
+  requestId String
+  spId      String
+  createdAt DateTime @default(now())
+
+  serviceRequest ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sp             User           @relation(fields: [spId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, spId])
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.

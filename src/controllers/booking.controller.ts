@@ -80,28 +80,41 @@ export const getActiveBookings = async (req: any, res: Response) => {
 
     // Process URLs and fetch coordinates for each booking
     const processedBookings = await Promise.all(bookings.map(async (b: any) => {
-      // Fetch coordinates for the location
-      const coords: any[] = await prisma.$queryRaw`
-        SELECT ST_X(coordinates::geometry) as lng, ST_Y(coordinates::geometry) as lat 
-        FROM "Address" 
-        WHERE id = ${b.locationId}
-      `;
+      let locationWithCoords = b.location;
       
-      const locationWithCoords = b.location ? {
-        ...b.location,
-        latitude: coords[0]?.lat,
-        longitude: coords[0]?.lng
-      } : null;
+      try {
+        if (b.locationId) {
+          // Fetch coordinates for the location
+          const coords: any[] = await prisma.$queryRaw`
+            SELECT ST_X(coordinates::geometry) as lng, ST_Y(coordinates::geometry) as lat 
+            FROM "Address" 
+            WHERE id = ${b.locationId}
+          `;
+          
+          if (coords && coords.length > 0) {
+            locationWithCoords = {
+              ...b.location,
+              latitude: coords[0].lat,
+              longitude: coords[0].lng
+            };
+          }
+        }
+      } catch (err) {
+        console.warn(`[GET ACTIVE] Failed to fetch coordinates for booking ${b.id}:`, err);
+      }
 
+      // Safe URL signing
+      const signedAudioUrl = b.audioMessageUrl ? await getSignedAssetUrl(b.audioMessageUrl) : null;
+      
       return {
         ...b,
         location: locationWithCoords,
-        audioMessageUrl: await getSignedAssetUrl(b.audioMessageUrl),
+        audioMessageUrl: signedAudioUrl,
         sp: b.sp ? {
           ...b.sp,
           profile: b.sp.profile ? {
             ...b.sp.profile,
-            profilePictureUrl: await getSignedAssetUrl(b.sp.profile.profilePictureUrl)
+            profilePictureUrl: b.sp.profile.profilePictureUrl ? await getSignedAssetUrl(b.sp.profile.profilePictureUrl) : null
           } : null
         } : null
       };
@@ -131,28 +144,42 @@ export const updateBookingStatus = async (req: any, res: Response) => {
     // Role-based status transitions
     if (req.role === 'SP') {
       if (status === 'ACCEPTED' && booking.status === 'PENDING') {
+        // Concurrency check: At most 5 accepted/active requests
+        const activeCount = await prisma.serviceRequest.count({
+            where: {
+                spId: req.userId,
+                status: { in: ['ACCEPTED', 'TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED'] }
+            }
+        });
+
+        if (activeCount >= 5) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'You cannot accept more than 5 active missions. Please complete current ones first.' 
+            });
+        }
+
         // When SP accepts, generate a 4-digit numeric startOtp
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        await prisma.serviceRequest.update({
+            where: { id },
+            data: { status, spId: req.userId, startOtp },
+        });
+        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}. Duty Status: REMAINS ON`);
+      } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
+        // Worker arrives at location. NOW disable duty status for new requests.
+        const startOtp = booking.startOtp || Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.$transaction([
           prisma.serviceRequest.update({
             where: { id },
-            data: { status, spId: req.userId, startOtp },
+            data: { status, startOtp },
           }),
-          prisma.serviceProviderProfile.update({
+          prisma.serviceProviderProfile.updateMany({
             where: { userId: req.userId },
-            data: { dutyStatus: false } as any
+            data: { dutyStatus: false }
           })
         ]);
-        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}. Duty Status: OFF`);
-      } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
-        // This is the stage where the worker arrives and asks for the START PIN
-        // FALLBACK: Generate startOtp if missing
-        const startOtp = booking.startOtp || Math.floor(1000 + Math.random() * 9000).toString();
-        await prisma.serviceRequest.update({
-          where: { id },
-          data: { status, startOtp },
-        });
-        console.log(`[BOOKING] Mission ${id} worker arrived. Start OTP: ${startOtp}`);
+        console.log(`[BOOKING] Mission ${id} marked as ARRIVED. Duty Status set to OFF.`);
       } else if (status === 'WORK_STARTED' && booking.status === 'TEMP_WORK_STARTED') {
         // Actual work start happens ONLY with correct OTP
         if (otp !== booking.startOtp) {
@@ -183,10 +210,10 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }),
           prisma.serviceProviderProfile.update({
             where: { userId: booking.spId! },
-            data: { dutyStatus: true } as any
+            data: { dutyStatus: false } as any
           })
         ]);
-        console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: ON`);
+        console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
       }
     }
 
@@ -256,17 +283,17 @@ export const cancelBooking = async (req: any, res: Response) => {
         },
       }),
       ...(booking.spId ? [
-        prisma.serviceProviderProfile.update({
+        prisma.serviceProviderProfile.updateMany({
           where: { userId: booking.spId },
-          data: { dutyStatus: true } as any
+          data: { dutyStatus: false }
         })
       ] : [])
     ]);
 
-    res.status(200).json({ success: true, message: 'Booking cancelled' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+    return res.status(200).json({ success: true, message: 'Booking cancelled successfully' });
+  } catch (error: any) {
+    console.error('[CANCEL_BOOKING] Error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error during cancellation' });
   }
 };
 

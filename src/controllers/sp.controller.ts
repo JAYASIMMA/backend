@@ -168,16 +168,25 @@ export const getBroadcasts = async (req: any, res: Response) => {
   console.log('---------------------------------------------------------');
 
   try {
-    // 0. Check if SP has any active work (Accepted, Started, or Pending Completion)
-    const activeWork = await prisma.serviceRequest.findFirst({
+    // 0. Check for physical work or mission limit
+    const activeRequests = await prisma.serviceRequest.findMany({
       where: {
         spId: userId,
         status: { in: ['ACCEPTED', 'WORK_STARTED', 'TEMP_WORK_STARTED', 'TEMP_COMPLETED'] }
       }
     });
 
-    if (activeWork) {
-      console.log(`[BROADCAST] SP ${userId} is currently AT WORK (Status: ${activeWork.status}). Hiding new broadcasts.`);
+    const isPhysicallyWorking = activeRequests.some(r => 
+        ['TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED'].includes(r.status)
+    );
+
+    if (isPhysicallyWorking) {
+      console.log(`[BROADCAST] SP ${userId} is currently ON-SITE. Hiding new broadcasts.`);
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    if (activeRequests.length >= 5) {
+      console.log(`[BROADCAST] SP ${userId} reached MAX MISSIONS (5). Hiding new broadcasts.`);
       return res.status(200).json({ success: true, data: [] });
     }
 
@@ -217,6 +226,12 @@ export const getBroadcasts = async (req: any, res: Response) => {
       JOIN "ServiceCategory" c ON sr."categoryId" = c.id
       LEFT JOIN "ServiceSubcategory" sc ON sr."subCategoryId" = sc.id
       WHERE sr.status = 'PENDING'
+      -- Exclude requests rejected by THIS SP
+      AND NOT EXISTS (
+        SELECT 1 FROM "ServiceRequestRejection" srr 
+        WHERE srr."requestId" = sr.id 
+        AND srr."spId" = ${userId}
+      )
       AND ST_DWithin(
         a.coordinates::geography, 
         ST_SetSRID(ST_Point(${parseFloat(lng as string)}, ${parseFloat(lat as string)}), 4326)::geography, 
@@ -224,9 +239,9 @@ export const getBroadcasts = async (req: any, res: Response) => {
       )
       ${(categoryName || subCategoryName) ? Prisma.sql`
         AND (
-          ${categoryName ? Prisma.sql`(c.name ILIKE ${'%' + categoryName + '%'} OR ${categoryName} ILIKE CONCAT('%', c.name, '%'))` : Prisma.empty}
+          ${categoryName ? Prisma.sql`(c.name = ${categoryName})` : Prisma.empty}
           ${(categoryName && subCategoryName) ? Prisma.sql` OR ` : Prisma.empty}
-          ${subCategoryName ? Prisma.sql`(sc.name ILIKE ${'%' + subCategoryName + '%'} OR ${subCategoryName} ILIKE CONCAT('%', sc.name, '%') OR c.name ILIKE ${'%' + subCategoryName + '%'})` : Prisma.empty}
+          ${subCategoryName ? Prisma.sql`(sc.name = ${subCategoryName} OR c.name = ${subCategoryName})` : Prisma.empty}
         )
       ` : Prisma.empty}
       ORDER BY distance_meters ASC
@@ -270,23 +285,72 @@ export const getDashboardStats = async (req: any, res: Response) => {
     const userId = req.userId;
 
     try {
-        // 1. Current Active Jobs (Assigned but not completed/cancelled)
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+
+        // 1. Immediate Missions (Accepted for today or immediate)
         const immediateTasks = await prisma.serviceRequest.count({
             where: {
                 spId: userId,
-                status: 'ACCEPTED'
+                status: 'ACCEPTED',
+                OR: [
+                    { scheduledAt: null },
+                    { scheduledAt: { lte: todayEnd } }
+                ]
             }
         });
 
-        // 2. Queue (In Progress or Scheduled)
-        const queueTasks = await prisma.serviceRequest.count({
+        // 2. Later Missions (Accepted for future dates)
+        const laterTasks = await prisma.serviceRequest.count({
             where: {
                 spId: userId,
-                status: 'WORK_STARTED'
+                status: 'ACCEPTED',
+                scheduledAt: { gt: todayEnd }
             }
         });
 
-        // 3. Lifetime Completions
+        // 3. Ongoing/Current Job (Actually in progress)
+        const currentJob = await prisma.serviceRequest.findFirst({
+            where: {
+                spId: userId,
+                status: { in: ['TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED'] }
+            },
+            include: {
+                category: true,
+                subCategory: true,
+                location: true,
+                customer: {
+                    include: { profile: true }
+                }
+            }
+        });
+
+        // 4. Fallback Active Job for UI gating (if no currentJob, take the first ACCEPTED)
+        const activeJob = currentJob || await prisma.serviceRequest.findFirst({
+            where: {
+                spId: userId,
+                status: 'ACCEPTED'
+            },
+            include: {
+                category: true,
+                subCategory: true,
+                location: true,
+                customer: {
+                    include: { profile: true }
+                },
+                sp: {
+                    include: { 
+                        profile: true,
+                        spProfile: true 
+                    }
+                }
+            },
+            orderBy: { createdAt: 'asc' }
+        });
+
+        // 5. Lifetime Completions
         const totalCompleted = await prisma.serviceRequest.count({
             where: {
                 spId: userId,
@@ -310,17 +374,20 @@ export const getDashboardStats = async (req: any, res: Response) => {
 
         const spProfile = await prisma.serviceProviderProfile.findUnique({
             where: { userId },
-            select: { dutyStatus: true }
+            select: { dutyStatus: true } as any
         });
 
         res.status(200).json({
             success: true,
             data: {
                 immediate: immediateTasks,
-                later: queueTasks,
+                later: laterTasks,
+                activeJobsCount: activeJob ? 1 : 0,
+                activeJob: activeJob || null,
+                isCurrentlyWorking: !!currentJob,
                 totalCompleted,
                 rating: parseFloat(avgRating),
-                dutyStatus: spProfile?.dutyStatus ?? true
+                dutyStatus: (spProfile as any)?.dutyStatus ?? true
             }
         });
     } catch (error) {
@@ -425,22 +492,6 @@ export const updateDutyStatus = async (req: any, res: Response) => {
     }
 
     try {
-        // Check if user has an active job
-        const activeWork = await prisma.serviceRequest.findFirst({
-            where: {
-                spId: userId,
-                status: { in: ['ACCEPTED', 'WORK_STARTED', 'TEMP_WORK_STARTED', 'TEMP_COMPLETED'] }
-            }
-        });
-
-        if (activeWork && dutyStatus === true) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Cannot set status to available while you have an active mission.',
-                debug: 'Active work detected, dutyStatus must remain false.'
-            });
-        }
-
         const updatedProfile = await prisma.serviceProviderProfile.update({
             where: { userId },
             data: { dutyStatus } as any
@@ -480,6 +531,39 @@ export const updateLiveLocation = async (req: any, res: Response) => {
         res.status(200).json({ success: true, message: 'Location updated' });
     } catch (error) {
         console.error('Update Live Location Error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * Reject a Broadcast (Will never show again for this SP)
+ */
+export const rejectBroadcast = async (req: any, res: Response) => {
+    const userId = req.userId;
+    const { requestId } = req.body;
+
+    if (!requestId) {
+        return res.status(400).json({ success: false, message: 'Request ID is required' });
+    }
+
+    try {
+        await (prisma as any).serviceRequestRejection.upsert({
+            where: {
+                requestId_spId: {
+                    requestId,
+                    spId: userId
+                }
+            },
+            update: {},
+            create: {
+                requestId,
+                spId: userId
+            }
+        });
+
+        res.status(200).json({ success: true, message: 'Mission rejected' });
+    } catch (error) {
+        console.error('Reject Broadcast Error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
