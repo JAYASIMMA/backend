@@ -151,7 +151,7 @@ export const getPublicPassport = async (req: Request, res: Response) => {
  * Get Job Broadcasts (Radius Search using PostGIS)
  */
 export const getBroadcasts = async (req: any, res: Response) => {
-  const { lat, lng, radius = 5000 } = req.query; // Radius in meters
+  const { lat, lng, radius = 7000 } = req.query; // Radius in meters (7km default)
 
   if (!lat || !lng) {
     console.warn('[BROADCAST] Missing coordinates. Lat:', lat, 'Lng:', lng);
