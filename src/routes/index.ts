@@ -59,7 +59,6 @@ router.get('/sp/history', authenticate, authorize(['SP']), spController.getServi
 router.get('/sp/broadcasts', authenticate, authorize(['SP']), spController.getBroadcasts);
 router.patch('/sp/duty-status', authenticate, authorize(['SP']), spController.updateDutyStatus);
 router.patch('/sp/live-location', authenticate, authorize(['SP']), spController.updateLiveLocation);
-router.post('/sp/reject-broadcast', authenticate, authorize(['SP']), spController.rejectBroadcast);
 
 // Auth Routes
 // ...
