@@ -176,7 +176,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }),
           prisma.serviceProviderProfile.updateMany({
             where: { userId: req.userId },
-            data: { dutyStatus: false }
+            data: { dutyStatus: true } // Keep online even when working
           })
         ]);
         console.log(`[BOOKING] Mission ${id} marked as ARRIVED. Duty Status set to OFF.`);
@@ -210,7 +210,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }),
           prisma.serviceProviderProfile.update({
             where: { userId: booking.spId! },
-            data: { dutyStatus: false } as any
+            data: { dutyStatus: true } as any // Keep online after completion
           })
         ]);
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
@@ -285,7 +285,7 @@ export const cancelBooking = async (req: any, res: Response) => {
       ...(booking.spId ? [
         prisma.serviceProviderProfile.updateMany({
           where: { userId: booking.spId },
-          data: { dutyStatus: false }
+          data: { dutyStatus: true } // Keep online after cancellation
         })
       ] : [])
     ]);

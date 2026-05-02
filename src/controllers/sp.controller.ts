@@ -194,12 +194,9 @@ export const getBroadcasts = async (req: any, res: Response) => {
       where: { userId }
     });
 
-    const dutyStatus = (spProfile as any)?.dutyStatus ?? true;
-    console.log(`[BROADCAST] SP ${userId} | Duty Status: ${dutyStatus ? 'AVAILABLE (True)' : 'BUSY/OFF DUTY (False)'}`);
-
-    if (!dutyStatus) {
-      return res.status(200).json({ success: true, data: [] });
-    }
+    // FORCE ALWAYS ONLINE: Ignoring dutyStatus check to ensure unlimited requests
+    const dutyStatus = true;
+    console.log(`[BROADCAST] SP ${userId} | Duty Status: ALWAYS ONLINE (Forced)`);
     const radiusMeters = parseFloat(radius as string) || 500000; // Increased default to 500km for testing
     
     const categoryName = spProfile?.categoryName?.trim();
@@ -387,7 +384,7 @@ export const getDashboardStats = async (req: any, res: Response) => {
                 isCurrentlyWorking: !!currentJob,
                 totalCompleted,
                 rating: parseFloat(avgRating),
-                dutyStatus: (spProfile as any)?.dutyStatus ?? true
+                dutyStatus: true // FORCE ALWAYS ONLINE
             }
         });
     } catch (error) {
@@ -492,14 +489,15 @@ export const updateDutyStatus = async (req: any, res: Response) => {
     }
 
     try {
+        // FORCE ALWAYS ONLINE: Ignoring incoming dutyStatus and setting to true
         const updatedProfile = await prisma.serviceProviderProfile.update({
             where: { userId },
-            data: { dutyStatus } as any
+            data: { dutyStatus: true } as any
         });
 
         res.status(200).json({ 
             success: true, 
-            message: `Duty status updated to ${dutyStatus ? 'ON' : 'OFF'}`,
+            message: `Duty status is forced to ON`,
             data: updatedProfile 
         });
     } catch (error) {
