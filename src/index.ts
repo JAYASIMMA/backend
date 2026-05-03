@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import os from 'os';
 import app from './app';
+import { startTimeoutChecker } from './services/timeout.service';
 
 const PORT = process.env.PORT || 3000;
 
@@ -19,6 +20,7 @@ const getLocalIps = () => {
 };
 
 app.listen(Number(PORT), '0.0.0.0', () => {
+  startTimeoutChecker();
   const localIps = getLocalIps();
   console.log(`\n🚀 [BACKEND] Server running on port ${PORT}`);
   console.log(`📡 Listening on: 0.0.0.0 (All interfaces)`);

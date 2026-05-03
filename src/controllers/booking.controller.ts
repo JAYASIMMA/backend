@@ -60,7 +60,7 @@ export const getActiveBookings = async (req: any, res: Response) => {
           { customerId: req.userId },
           { spId: req.userId }
         ],
-        status: { notIn: ['COMPLETED', 'CANCELLED'] }
+        status: { notIn: ['COMPLETED', 'CANCELLED', 'TIMED_OUT'] }
       },
       include: {
         category: true,
@@ -305,7 +305,7 @@ export const getBookingHistory = async (req: any, res: Response) => {
           { customerId: req.userId },
           { spId: req.userId }
         ],
-        status: { in: ['COMPLETED', 'CANCELLED'] }
+        status: { in: ['COMPLETED', 'CANCELLED', 'TIMED_OUT'] }
       },
       include: {
         category: true,
@@ -316,6 +316,7 @@ export const getBookingHistory = async (req: any, res: Response) => {
         },
         feedback: true,
         cancellation: true,
+        timedOut: true,
       },
       orderBy: { updatedAt: 'desc' },
     });

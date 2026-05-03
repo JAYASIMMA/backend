@@ -102,6 +102,7 @@ model ServiceRequest {
   chatMessages    ChatMessage[]
   feedback        Feedback?
   cancellation    RequestCancellationReason?
+  timedOut        TimedOutRequest?
   category        ServiceCategory            @relation(fields: [categoryId], references: [id])
   customer        User                       @relation("CustomerRequests", fields: [customerId], references: [id])
   location        Address                    @relation(fields: [locationId], references: [id])
@@ -162,6 +163,14 @@ model ServiceRequestRejection {
   @@unique([requestId, spId])
 }
 
+model TimedOutRequest {
+  id        String         @id @default(uuid())
+  requestId String         @unique
+  reason    String         @default("No professional accepted within 5 minutes")
+  createdAt DateTime       @default(now())
+  request   ServiceRequest @relation(fields: [requestId], references: [id])
+}
+
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model spatial_ref_sys {
   srid      Int     @id
@@ -185,4 +194,5 @@ enum RequestStatus {
   TEMP_COMPLETED
   COMPLETED
   CANCELLED
+  TIMED_OUT
 }
