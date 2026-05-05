@@ -322,8 +322,32 @@ export const getBookingHistory = async (req: any, res: Response) => {
     });
 
     const processedHistory = await Promise.all(bookings.map(async (b: any) => {
+      let locationWithCoords = b.location;
+      
+      try {
+        if (b.locationId) {
+          // Fetch coordinates for the location
+          const coords: any[] = await prisma.$queryRaw`
+            SELECT ST_X(coordinates::geometry) as lng, ST_Y(coordinates::geometry) as lat 
+            FROM "Address" 
+            WHERE id = ${b.locationId}
+          `;
+          
+          if (coords && coords.length > 0) {
+            locationWithCoords = {
+              ...b.location,
+              latitude: coords[0].lat,
+              longitude: coords[0].lng
+            };
+          }
+        }
+      } catch (err) {
+        console.warn(`[GET HISTORY] Failed to fetch coordinates for booking ${b.id}:`, err);
+      }
+
       return {
         ...b,
+        location: locationWithCoords,
         audioMessageUrl: await getSignedAssetUrl(b.audioMessageUrl),
         sp: b.sp ? {
           ...b.sp,

@@ -66,6 +66,7 @@ router.post('/sp/reject-broadcast', authenticate, authorize(['SP']), spControlle
 // Category Routes
 router.get('/categories', categoryController.getCategories);
 router.get('/categories/:id', categoryController.getCategoryById);
+router.get('/categories/:id/sps', categoryController.getNearbySPs);
 router.post('/categories', authenticate, authorize(['ADMIN']), upload.single('icon'), categoryController.createCategory);
 router.put('/categories/:id', authenticate, authorize(['ADMIN']), upload.single('icon'), categoryController.updateCategory);
 router.delete('/categories/:id', authenticate, authorize(['ADMIN']), categoryController.deleteCategory);

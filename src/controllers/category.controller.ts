@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { getCache, setCache, deleteCache } from '../services/redis.service';
 import { getPresignedUrl, uploadFile, getSignedAssetUrl } from '../services/s3.service';
@@ -234,5 +235,111 @@ export const deleteSubcategory = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Delete Subcategory Error:', error);
     res.status(500).json({ success: false, message: 'Delete failed' });
+  }
+};
+
+/**
+ * Get Nearby Service Providers for a Category (within radius)
+ */
+export const getNearbySPs = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { lat, lng, radius = 5000 } = req.query;
+
+  try {
+    const category = await prisma.serviceCategory.findUnique({
+      where: { id },
+    });
+
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    const radiusMeters = parseFloat(radius as string);
+    
+    let sps: any[];
+    if (lat && lng) {
+      const latitude = parseFloat(lat as string);
+      const longitude = parseFloat(lng as string);
+      
+      // Use raw query for distance calculation between Address coordinates and SP Float coordinates
+      // We use geography for accurate distance in meters
+      sps = await prisma.$queryRaw`
+        SELECT 
+          u.id,
+          u.mobile,
+          p."fullName",
+          p."profilePictureUrl",
+          sp.latitude,
+          sp.longitude,
+          (
+            SELECT COALESCE(AVG(f.rating), 5.0)
+            FROM "Feedback" f 
+            JOIN "ServiceRequest" sr ON f."requestId" = sr.id 
+            WHERE sr."spId" = u.id
+          ) as rating,
+          ST_Distance(
+            ST_SetSRID(ST_Point(sp.longitude, sp.latitude), 4326)::geography,
+            ST_SetSRID(ST_Point(${longitude}, ${latitude}), 4326)::geography
+          ) as distance
+        FROM "User" u
+        JOIN "Profile" p ON u.id = p."userId"
+        JOIN "ServiceProviderProfile" sp ON u.id = sp."userId"
+        WHERE sp."categoryName" = ${category.name}
+        AND sp."dutyStatus" = true
+        AND ST_DWithin(
+          ST_SetSRID(ST_Point(sp.longitude, sp.latitude), 4326)::geography,
+          ST_SetSRID(ST_Point(${longitude}, ${latitude}), 4326)::geography,
+          ${radiusMeters}
+        )
+        ORDER BY distance ASC
+      `;
+    } else {
+      // Fallback: return all SPs in category if no location provided
+      const users = await prisma.user.findMany({
+        where: {
+          role: 'SP',
+          spProfile: {
+            categoryName: category.name,
+            dutyStatus: true
+          }
+        },
+        include: {
+          profile: true,
+          spProfile: true
+        }
+      });
+      
+      sps = await Promise.all(users.map(async (u: any) => {
+          const ratingData: any[] = await prisma.$queryRaw`
+            SELECT COALESCE(AVG(rating), 5.0) as avg_rating 
+            FROM "Feedback" f 
+            JOIN "ServiceRequest" sr ON f."requestId" = sr.id 
+            WHERE sr."spId" = ${u.id}
+          `;
+          
+          return {
+            id: u.id,
+            mobile: u.mobile,
+            fullName: u.profile?.fullName,
+            profilePictureUrl: u.profile?.profilePictureUrl,
+            latitude: u.spProfile?.latitude,
+            longitude: u.spProfile?.longitude,
+            rating: ratingData[0]?.avg_rating || 5.0,
+            distance: 0
+          };
+      }));
+    }
+
+    // Sign URLs and process ratings
+    const processedSPs = await Promise.all(sps.map(async (sp) => ({
+      ...sp,
+      profilePictureUrl: sp.profilePictureUrl ? await getSignedAssetUrl(sp.profilePictureUrl) : null,
+      rating: parseFloat(sp.rating || 5.0)
+    })));
+
+    res.status(200).json({ success: true, data: processedSPs });
+  } catch (error) {
+    console.error('Error fetching nearby SPs:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
