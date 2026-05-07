@@ -142,7 +142,23 @@ export const updateBookingStatus = async (req: any, res: Response) => {
     }
 
     // Role-based status transitions
-    if (req.role === 'SP') {
+    if (status === 'TIMED_OUT' && booking.status === 'PENDING') {
+      await prisma.$transaction([
+        prisma.serviceRequest.update({
+          where: { id },
+          data: { status: 'TIMED_OUT' }
+        }),
+        prisma.timedOutRequest.upsert({
+          where: { requestId: id },
+          update: {},
+          create: {
+            requestId: id,
+            reason: "No professional accepted within 5 minutes"
+          }
+        })
+      ]);
+      console.log(`[BOOKING] Mission ${id} TIMED_OUT by system/customer.`);
+    } else if (req.role === 'SP') {
       if (status === 'ACCEPTED' && booking.status === 'PENDING') {
         // Concurrency check: At most 5 accepted/active requests
         const activeCount = await prisma.serviceRequest.count({

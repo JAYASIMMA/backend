@@ -277,6 +277,11 @@ export const getNearbySPs = async (req: Request, res: Response) => {
             JOIN "ServiceRequest" sr ON f."requestId" = sr.id 
             WHERE sr."spId" = u.id
           ) as rating,
+          (
+            SELECT COUNT(sr.id)::int
+            FROM "ServiceRequest" sr 
+            WHERE sr."spId" = u.id AND sr.status = 'COMPLETED'
+          ) as "workCount",
           ST_Distance(
             ST_SetSRID(ST_Point(sp.longitude, sp.latitude), 4326)::geography,
             ST_SetSRID(ST_Point(${longitude}, ${latitude}), 4326)::geography
@@ -284,8 +289,9 @@ export const getNearbySPs = async (req: Request, res: Response) => {
         FROM "User" u
         JOIN "Profile" p ON u.id = p."userId"
         JOIN "ServiceProviderProfile" sp ON u.id = sp."userId"
-        WHERE sp."categoryName" = ${category.name}
+        WHERE LOWER(sp."categoryName") = LOWER(${category.name})
         AND sp."dutyStatus" = true
+        AND sp."locationUpdatedAt" >= NOW() - INTERVAL '60 seconds'
         AND ST_DWithin(
           ST_SetSRID(ST_Point(sp.longitude, sp.latitude), 4326)::geography,
           ST_SetSRID(ST_Point(${longitude}, ${latitude}), 4326)::geography,
@@ -295,12 +301,16 @@ export const getNearbySPs = async (req: Request, res: Response) => {
       `;
     } else {
       // Fallback: return all SPs in category if no location provided
+      const activeWindowAgo = new Date(Date.now() - 60000); // 60 seconds
       const users = await prisma.user.findMany({
         where: {
           role: 'SP',
           spProfile: {
-            categoryName: category.name,
-            dutyStatus: true
+            categoryName: { equals: category.name, mode: 'insensitive' },
+            dutyStatus: true,
+            locationUpdatedAt: {
+              gte: activeWindowAgo
+            }
           }
         },
         include: {
@@ -316,7 +326,11 @@ export const getNearbySPs = async (req: Request, res: Response) => {
             JOIN "ServiceRequest" sr ON f."requestId" = sr.id 
             WHERE sr."spId" = ${u.id}
           `;
-          
+          const workCountData: any[] = await prisma.$queryRaw`
+            SELECT COUNT(id) as work_count 
+            FROM "ServiceRequest" 
+            WHERE "spId" = ${u.id} AND status = 'COMPLETED'
+          `;
           return {
             id: u.id,
             mobile: u.mobile,
@@ -324,7 +338,8 @@ export const getNearbySPs = async (req: Request, res: Response) => {
             profilePictureUrl: u.profile?.profilePictureUrl,
             latitude: u.spProfile?.latitude,
             longitude: u.spProfile?.longitude,
-            rating: ratingData[0]?.avg_rating || 5.0,
+            rating: ratingData.length > 0 ? parseFloat(ratingData[0].avg_rating) : 5.0,
+            workCount: workCountData.length > 0 ? Number(workCountData[0].work_count) : 0,
             distance: 0
           };
       }));

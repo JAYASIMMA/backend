@@ -522,7 +522,8 @@ export const updateLiveLocation = async (req: any, res: Response) => {
             where: { userId },
             data: { 
                 latitude: parseFloat(lat),
-                longitude: parseFloat(lng)
+                longitude: parseFloat(lng),
+                locationUpdatedAt: new Date()
             } as any
         });
 
