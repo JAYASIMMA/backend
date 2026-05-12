@@ -55,7 +55,7 @@ async function main() {
       JOIN "ServiceProviderProfile" sp ON u.id = sp."userId"
       WHERE LOWER(sp."categoryName") = LOWER(${category.name})
       AND sp."dutyStatus" = true
-      AND sp."locationUpdatedAt" >= NOW() - INTERVAL '60 seconds'
+      AND sp."locationUpdatedAt" >= NOW() - INTERVAL '10 seconds'
       AND ST_DWithin(
         ST_SetSRID(ST_Point(sp.longitude, sp.latitude), 4326)::geography,
         ST_SetSRID(ST_Point(${longitude}, ${latitude}), 4326)::geography,
