@@ -17,8 +17,8 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
   try {
     // 1. Verify token with Firebase Admin SDK
     const decodedToken = await admin.auth().verifyIdToken(idToken);
-    const { uid, phone_number } = decodedToken;
-    console.log(`Firebase Auth Sync: Token verified for UID: ${uid}, Phone: ${phone_number}`);
+    const { uid, phone_number, name } = decodedToken;
+    console.log(`Firebase Auth Sync: Token verified for UID: ${uid}, Phone: ${phone_number}, Name from Token: ${name}`);
 
     if (!phone_number) {
       return res.status(401).json({ success: false, message: 'Invalid token: No phone number found in Firebase token' });
@@ -36,7 +36,7 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
           role: 'CUSTOMER',
           profile: {
             create: {
-              fullName: 'Valued Client'
+              fullName: name || ''
             }
           }
         },
@@ -62,7 +62,17 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
       },
     });
     
-    const isProfileComplete = !!(userWithDetails?.profile?.fullName && userWithDetails.addresses.length > 0);
+    // A profile is complete only if the full name is present, not empty, and not a default placeholder like 'Valued Client'
+    const fullName = userWithDetails?.profile?.fullName?.trim() || '';
+    const isProfileComplete = !!(
+      fullName && 
+      fullName !== '' && 
+      fullName.toLowerCase() !== 'valued client' && 
+      fullName.toLowerCase() !== 'unvalued client' && 
+      fullName.toLowerCase() !== 'valuable client' && 
+      userWithDetails?.addresses && 
+      userWithDetails.addresses.length > 0
+    );
 
     // 3. Generate our OWN backend JWT for session management
     const token = jwt.sign(

@@ -52,7 +52,7 @@ export const getProfile = async (req: any, res: Response) => {
     if (!profile) {
       console.log(`[Profile] No profile found for userId: ${userId}, returning default.`);
       const defaultProfile = {
-        fullName: 'Valued Client',
+        fullName: '',
         profilePictureUrl: null,
         bio: '',
         user: {

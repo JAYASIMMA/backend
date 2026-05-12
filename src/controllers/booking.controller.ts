@@ -2,6 +2,47 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 
+const enrichAndProcessBooking = async (b: any) => {
+  if (!b) return null;
+  let locationWithCoords = b.location;
+  
+  if (b.locationId) {
+    try {
+      const coords: any[] = await prisma.$queryRaw`
+        SELECT ST_X(coordinates::geometry) as lng, ST_Y(coordinates::geometry) as lat 
+        FROM "Address" 
+        WHERE id = ${b.locationId}
+      `;
+      
+      if (coords && coords.length > 0) {
+        locationWithCoords = {
+          ...b.location,
+          latitude: coords[0].lat,
+          longitude: coords[0].lng
+        };
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch coordinates for booking ${b.id}:`, err);
+    }
+  }
+
+  const signedAudioUrl = b.audioMessageUrl ? await getSignedAssetUrl(b.audioMessageUrl) : null;
+
+  return {
+    ...b,
+    location: locationWithCoords,
+    audioMessageUrl: signedAudioUrl,
+    sp: b.sp ? {
+      ...b.sp,
+      profile: b.sp.profile ? {
+        ...b.sp.profile,
+        profilePictureUrl: b.sp.profile.profilePictureUrl ? await getSignedAssetUrl(b.sp.profile.profilePictureUrl) : null
+      } : null
+    } : null
+  };
+};
+
+
 export const createBooking = async (req: any, res: Response) => {
   let { categoryId, subCategoryId, locationId, messageText, audioMessageUrl, scheduledAt } = req.body;
 
@@ -35,15 +76,16 @@ export const createBooking = async (req: any, res: Response) => {
         scheduledAt: (scheduledAt && scheduledAt !== 'null') ? new Date(scheduledAt) : null,
         status: 'PENDING',
       },
+      include: {
+        category: true,
+        location: true,
+      }
     });
 
     console.log(`[CREATE BOOKING] Successfully created booking ID: ${booking.id}`);
     
-    // Sign the URL for the response
-    const responseData = {
-      ...booking,
-      audioMessageUrl: await getSignedAssetUrl(booking.audioMessageUrl)
-    };
+    // Sign the URL and enrich coordinates for the response
+    const responseData = await enrichAndProcessBooking(booking);
 
     res.status(201).json({ success: true, data: responseData });
   } catch (error) {
@@ -79,46 +121,7 @@ export const getActiveBookings = async (req: any, res: Response) => {
     });
 
     // Process URLs and fetch coordinates for each booking
-    const processedBookings = await Promise.all(bookings.map(async (b: any) => {
-      let locationWithCoords = b.location;
-      
-      try {
-        if (b.locationId) {
-          // Fetch coordinates for the location
-          const coords: any[] = await prisma.$queryRaw`
-            SELECT ST_X(coordinates::geometry) as lng, ST_Y(coordinates::geometry) as lat 
-            FROM "Address" 
-            WHERE id = ${b.locationId}
-          `;
-          
-          if (coords && coords.length > 0) {
-            locationWithCoords = {
-              ...b.location,
-              latitude: coords[0].lat,
-              longitude: coords[0].lng
-            };
-          }
-        }
-      } catch (err) {
-        console.warn(`[GET ACTIVE] Failed to fetch coordinates for booking ${b.id}:`, err);
-      }
-
-      // Safe URL signing
-      const signedAudioUrl = b.audioMessageUrl ? await getSignedAssetUrl(b.audioMessageUrl) : null;
-      
-      return {
-        ...b,
-        location: locationWithCoords,
-        audioMessageUrl: signedAudioUrl,
-        sp: b.sp ? {
-          ...b.sp,
-          profile: b.sp.profile ? {
-            ...b.sp.profile,
-            profilePictureUrl: b.sp.profile.profilePictureUrl ? await getSignedAssetUrl(b.sp.profile.profilePictureUrl) : null
-          } : null
-        } : null
-      };
-    }));
+    const processedBookings = await Promise.all(bookings.map(enrichAndProcessBooking));
 
     res.status(200).json({ success: true, data: processedBookings });
   } catch (error) {
@@ -248,7 +251,9 @@ export const updateBookingStatus = async (req: any, res: Response) => {
       }
     });
 
-    res.status(200).json({ success: true, message: 'Status updated', data: updatedBooking });
+    const responseData = await enrichAndProcessBooking(updatedBooking);
+
+    res.status(200).json({ success: true, message: 'Status updated', data: responseData });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -337,43 +342,7 @@ export const getBookingHistory = async (req: any, res: Response) => {
       orderBy: { updatedAt: 'desc' },
     });
 
-    const processedHistory = await Promise.all(bookings.map(async (b: any) => {
-      let locationWithCoords = b.location;
-      
-      try {
-        if (b.locationId) {
-          // Fetch coordinates for the location
-          const coords: any[] = await prisma.$queryRaw`
-            SELECT ST_X(coordinates::geometry) as lng, ST_Y(coordinates::geometry) as lat 
-            FROM "Address" 
-            WHERE id = ${b.locationId}
-          `;
-          
-          if (coords && coords.length > 0) {
-            locationWithCoords = {
-              ...b.location,
-              latitude: coords[0].lat,
-              longitude: coords[0].lng
-            };
-          }
-        }
-      } catch (err) {
-        console.warn(`[GET HISTORY] Failed to fetch coordinates for booking ${b.id}:`, err);
-      }
-
-      return {
-        ...b,
-        location: locationWithCoords,
-        audioMessageUrl: await getSignedAssetUrl(b.audioMessageUrl),
-        sp: b.sp ? {
-          ...b.sp,
-          profile: b.sp.profile ? {
-            ...b.sp.profile,
-            profilePictureUrl: await getSignedAssetUrl(b.sp.profile.profilePictureUrl)
-          } : null
-        } : null
-      };
-    }));
+    const processedHistory = await Promise.all(bookings.map(enrichAndProcessBooking));
 
     res.status(200).json({ success: true, data: processedHistory });
   } catch (error) {
