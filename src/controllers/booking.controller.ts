@@ -79,6 +79,7 @@ export const createBooking = async (req: any, res: Response) => {
       include: {
         category: true,
         location: true,
+        subCategory: true,
       }
     });
 
@@ -106,6 +107,7 @@ export const getActiveBookings = async (req: any, res: Response) => {
       },
       include: {
         category: true,
+        subCategory: true,
         location: true,
         customer: {
           include: { profile: true }
@@ -240,6 +242,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
       where: { id },
       include: {
         category: true,
+        subCategory: true,
         location: true,
         customer: { include: { profile: true } },
         sp: { 
