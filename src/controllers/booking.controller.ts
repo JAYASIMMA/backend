@@ -134,7 +134,7 @@ export const getActiveBookings = async (req: any, res: Response) => {
 
 export const updateBookingStatus = async (req: any, res: Response) => {
   const { id } = req.params;
-  const { status, otp } = req.body;
+  const { status, otp, amountPaid, optedServices } = req.body;
 
   try {
     const booking = await prisma.serviceRequest.findUnique({
@@ -235,6 +235,24 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           })
         ]);
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
+      }
+    } else if (req.role === 'CUSTOMER') {
+      if (booking.status === 'TEMP_COMPLETED') {
+        const updateData: any = {};
+        if (amountPaid !== undefined) {
+          updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : amountPaid;
+        }
+        if (optedServices !== undefined) {
+          updateData.optedServices = optedServices;
+        }
+
+        if (Object.keys(updateData).length > 0) {
+          await prisma.serviceRequest.update({
+            where: { id },
+            data: updateData,
+          });
+          console.log(`[BOOKING] Customer updated completion details for mission ${id}:`, updateData);
+        }
       }
     }
 

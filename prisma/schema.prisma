@@ -97,6 +97,8 @@ model ServiceRequest {
   messageText     String?
   startOtp        String?
   completionOtp   String?
+  amountPaid      Float?
+  optedServices   String?
   scheduledAt     DateTime?
   createdAt       DateTime                   @default(now())
   updatedAt       DateTime                   @updatedAt
