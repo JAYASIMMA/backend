@@ -1,6 +1,67 @@
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
+import * as admin from 'firebase-admin';
+
+/**
+ * Send a high-priority data-only multicast push notification to workers (SPs).
+ */
+const sendMulticastPush = async (tokens: string[], data: Record<string, string>) => {
+  if (tokens.length === 0) return;
+  const payload = {
+    tokens,
+    data,
+    android: {
+      priority: 'high' as const,
+    },
+    apns: {
+      payload: {
+        aps: {
+          contentAvailable: true,
+        },
+      },
+      headers: {
+        'apns-priority': '10',
+      },
+    },
+  };
+  try {
+    const response = await admin.messaging().sendEachForMulticast(payload);
+    console.log(`[FCM] Multicast successfully sent ${response.successCount} messages; ${response.failureCount} failed.`);
+  } catch (error) {
+    console.error('[FCM] Multicast send error:', error);
+  }
+};
+
+/**
+ * Send a high-priority alarm-level return push notification to the customer.
+ */
+const sendSinglePush = async (token: string, data: Record<string, string>) => {
+  const payload = {
+    token,
+    data,
+    android: {
+      priority: 'high' as const,
+    },
+    apns: {
+      payload: {
+        aps: {
+          contentAvailable: true,
+        },
+      },
+      headers: {
+        'apns-priority': '10',
+      },
+    },
+  };
+  try {
+    const response = await admin.messaging().send(payload);
+    console.log(`[FCM] Customer alarm successfully sent message:`, response);
+  } catch (error) {
+    console.error('[FCM] Customer alarm send error:', error);
+  }
+};
+
 
 const enrichAndProcessBooking = async (b: any) => {
   if (!b) return null;
@@ -85,6 +146,60 @@ export const createBooking = async (req: any, res: Response) => {
 
     console.log(`[CREATE BOOKING] Successfully created booking ID: ${booking.id}`);
     
+    // Dispatch FCM notifications to matched workers in the background
+    (async () => {
+      try {
+        const category = await prisma.serviceCategory.findUnique({
+          where: { id: categoryId }
+        });
+        const subCategory = subCategoryId ? await prisma.serviceSubcategory.findUnique({
+          where: { id: subCategoryId }
+        }) : null;
+
+        if (category) {
+          const targetCategory = category.name.trim();
+          const targetSubCategory = subCategory?.name?.trim();
+
+          const workers = await prisma.user.findMany({
+            where: {
+              role: 'SP',
+              fcmToken: { not: null },
+              spProfile: {
+                OR: [
+                  { categoryName: targetCategory },
+                  { subCategoryName: targetCategory },
+                  ...(targetSubCategory ? [
+                    { categoryName: targetSubCategory },
+                    { subCategoryName: targetSubCategory }
+                  ] : [])
+                ]
+              }
+            },
+            select: { fcmToken: true }
+          });
+
+          const tokens = workers.map(w => w.fcmToken as string).filter(t => t !== '');
+          if (tokens.length > 0) {
+            console.log(`[FCM] Found ${tokens.length} matching workers for category "${targetCategory}". Sending push notifications...`);
+            const dataPayload = {
+              click_action: 'FLUTTER_NOTIFICATION_CLICK',
+              type: 'NEW_BOOKING',
+              bookingId: booking.id,
+              title: 'New Mission Request!',
+              body: `A new ${targetCategory}${targetSubCategory ? ` (${targetSubCategory})` : ''} mission is available near you.`,
+              categoryName: targetCategory,
+              messageText: messageText || ''
+            };
+            await sendMulticastPush(tokens, dataPayload);
+          } else {
+            console.log(`[FCM] No workers with active FCM tokens found for category "${targetCategory}".`);
+          }
+        }
+      } catch (fcmErr: any) {
+        console.error('[FCM] Error processing worker broadcast pushes:', fcmErr);
+      }
+    })();
+
     // Sign the URL and enrich coordinates for the response
     const responseData = await enrichAndProcessBooking(booking);
 
@@ -273,6 +388,54 @@ export const updateBookingStatus = async (req: any, res: Response) => {
     });
 
     const responseData = await enrichAndProcessBooking(updatedBooking);
+
+    // Send customer return push notification on worker actions
+    if (req.role === 'SP' && updatedBooking && updatedBooking.customer?.fcmToken) {
+      (async () => {
+        try {
+          const customerFcmToken = updatedBooking.customer.fcmToken!;
+          const currentStatus = updatedBooking.status;
+          
+          let alertTitle = 'Mission Update';
+          let alertBody = `Your booking status has been updated to ${currentStatus}.`;
+
+          if (currentStatus === 'ACCEPTED') {
+            const spName = updatedBooking.sp?.profile?.fullName || 'A Service Professional';
+            alertTitle = 'Mission Accepted! 🛠️';
+            alertBody = `${spName} has accepted your request. Start PIN: ${updatedBooking.startOtp || ''}`;
+          } else if (currentStatus === 'TEMP_WORK_STARTED') {
+            alertTitle = 'Professional Arrived! 📍';
+            alertBody = 'Your professional has arrived at your location. Please share the start PIN with them.';
+          } else if (currentStatus === 'WORK_STARTED') {
+            alertTitle = 'Work Started! ⚡';
+            alertBody = 'Your service has officially begun.';
+          } else if (currentStatus === 'TEMP_COMPLETED') {
+            alertTitle = 'Work Finished! 🎉';
+            alertBody = 'The service is complete. Please share the completion PIN to authorize.';
+          } else if (currentStatus === 'COMPLETED') {
+            alertTitle = 'Mission Complete! ✅';
+            alertBody = 'Your service has been fully completed. Thank you!';
+          }
+
+          console.log(`[FCM] Sending return notification to customer ${updatedBooking.customerId} for status "${currentStatus}"...`);
+          
+          const dataPayload = {
+            click_action: 'FLUTTER_NOTIFICATION_CLICK',
+            type: 'CUSTOMER_ALARM',
+            bookingId: updatedBooking.id,
+            title: alertTitle,
+            body: alertBody,
+            status: currentStatus,
+            startOtp: updatedBooking.startOtp || '',
+            completionOtp: updatedBooking.completionOtp || ''
+          };
+
+          await sendSinglePush(customerFcmToken, dataPayload);
+        } catch (fcmErr) {
+          console.error('[FCM] Error sending return push to customer:', fcmErr);
+        }
+      })();
+    }
 
     res.status(200).json({ success: true, message: 'Status updated', data: responseData });
   } catch (error) {

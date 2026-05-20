@@ -46,9 +46,9 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
     // Check profile completeness
     const userWithDetails = await prisma.user.findUnique({
       where: { id: user.id },
-      include: { 
-        profile: true, 
-        addresses: { 
+      include: {
+        profile: true,
+        addresses: {
           select: {
             id: true,
             addressLine: true,
@@ -57,20 +57,20 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
             city: true,
             isDefault: true
           },
-          take: 1 
-        } 
+          take: 1
+        }
       },
     });
-    
+
     // A profile is complete only if the full name is present, not empty, and not a default placeholder like 'Valued Client'
     const fullName = userWithDetails?.profile?.fullName?.trim() || '';
     const isProfileComplete = !!(
-      fullName && 
-      fullName !== '' && 
-      fullName.toLowerCase() !== 'valued client' && 
-      fullName.toLowerCase() !== 'unvalued client' && 
-      fullName.toLowerCase() !== 'valuable client' && 
-      userWithDetails?.addresses && 
+      fullName &&
+      fullName !== '' &&
+      fullName.toLowerCase() !== 'valued client' &&
+      fullName.toLowerCase() !== 'unvalued client' &&
+      fullName.toLowerCase() !== 'valuable client' &&
+      userWithDetails?.addresses &&
       userWithDetails.addresses.length > 0
     );
 
@@ -81,9 +81,9 @@ export const verifyFirebaseToken = async (req: Request, res: Response) => {
       { expiresIn: '30d' }
     );
 
-    res.status(200).json({ 
-      success: true, 
-      token, 
+    res.status(200).json({
+      success: true,
+      token,
       isProfileComplete,
       role: user.role,
       userId: user.id
@@ -103,7 +103,7 @@ export const loginPassword = async (req: Request, res: Response) => {
 
   try {
     let mobileStr = mobile.toString().trim();
-    
+
     // Normalize: If 10 digits, assume +91 prefix for India
     if (mobileStr.length === 10 && !mobileStr.startsWith('+')) {
       mobileStr = `+91${mobileStr}`;
@@ -125,9 +125,9 @@ export const loginPassword = async (req: Request, res: Response) => {
 
     // Role-specific check: Service Providers must be verified by admin
     if (user.role === 'SP' && !user.spProfile?.isVerified) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Your account is pending admin verification. Please try again later.' 
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is pending admin verification. Please try again later.'
       });
     }
 
@@ -141,8 +141,8 @@ export const loginPassword = async (req: Request, res: Response) => {
     res.status(200).json({ success: true, token, role: user.role, userId: user.id });
   } catch (error: any) {
     console.error('❌ Password Login Error:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Internal server error',
       debug: process.env.NODE_ENV === 'development' ? error.message : undefined,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
@@ -169,20 +169,45 @@ export const checkUserRole = async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      return res.status(200).json({ 
-        success: true, 
-        exists: false, 
-        role: 'NONE' 
+      return res.status(200).json({
+        success: true,
+        exists: false,
+        role: 'NONE'
       });
     }
 
-    res.status(200).json({ 
-      success: true, 
-      exists: true, 
-      role: user.role 
+    res.status(200).json({
+      success: true,
+      exists: true,
+      role: user.role
     });
   } catch (error: any) {
     console.error('❌ Check User Role Error:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
+
+/**
+ * Save FCM Registration Token for User
+ */
+export const saveFcmToken = async (req: any, res: Response) => {
+  const { fcmToken } = req.body;
+
+  if (!fcmToken) {
+    return res.status(400).json({ success: false, message: 'fcmToken is required' });
+  }
+
+  try {
+    const userId = req.userId;
+    await prisma.user.update({
+      where: { id: userId },
+      data: { fcmToken },
+    });
+    console.log(`[FCM] Token updated successfully for user ${userId}: ${fcmToken.substring(0, 15)}...`);
+    res.status(200).json({ success: true, message: 'FCM token synced successfully' });
+  } catch (error: any) {
+    console.error('❌ Save FCM Token Error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
