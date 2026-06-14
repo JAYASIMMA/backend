@@ -4,8 +4,8 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  let mobile = '9884633223'; // Default SuperAdmin Mobile
-  const password = 'admin1984'; // Default SuperAdmin Password
+  let mobile = '9965332234'; // Default SuperAdmin Mobile
+  const password = 'psk@123'; // Default SuperAdmin Password
 
   // Normalize: Add +91 prefix to match backend login logic
   if (mobile.length === 10 && !mobile.startsWith('+')) {
@@ -23,12 +23,12 @@ async function main() {
     const admin = await prisma.user.upsert({
       where: { mobile },
       update: {
-        role: 'ADMIN',
+        role: 'SUPER_ADMIN',
         passwordHash,
       },
       create: {
         mobile,
-        role: 'ADMIN',
+        role: 'SUPER_ADMIN',
         passwordHash,
       },
     });

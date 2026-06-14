@@ -188,6 +188,7 @@ enum Role {
   CUSTOMER
   SP
   ADMIN
+  SUPER_ADMIN
 }
 
 enum RequestStatus {

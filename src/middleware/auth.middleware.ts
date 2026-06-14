@@ -57,7 +57,16 @@ export const authenticate = async (req: any, res: Response, next: NextFunction) 
 
 export const authorize = (roles: string[]) => {
   return (req: any, res: Response, next: NextFunction) => {
-    if (!roles.includes(req.role)) {
+    const userRole = req.role;
+    const roleHierarchy: Record<string, string[]> = {
+      SUPER_ADMIN: ['SUPER_ADMIN', 'ADMIN', 'SP', 'CUSTOMER'],
+      ADMIN: ['ADMIN', 'SP', 'CUSTOMER'],
+      SP: ['SP', 'CUSTOMER'],
+      CUSTOMER: ['CUSTOMER'],
+    };
+
+    const allowed = roles.some((role) => (roleHierarchy[userRole] || [userRole]).includes(role));
+    if (!allowed) {
       return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions' });
     }
     next();
