@@ -3,6 +3,9 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma';
 import * as admin from 'firebase-admin';
+import { OAuth2Client } from 'google-auth-library';
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 /**
  * Verify Firebase ID Token with our backend and generate a local JWT
@@ -184,6 +187,76 @@ export const checkUserRole = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('❌ Check User Role Error:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+export const verifyGoogleToken = async (req: Request, res: Response) => {
+  const { idToken } = req.body;
+
+  if (!idToken) {
+    return res.status(400).json({ success: false, message: 'Google ID token is required' });
+  }
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      return res.status(401).json({ success: false, message: 'Invalid Google token: no email found' });
+    }
+
+    const { email, name, sub: googleId } = payload;
+
+    let user = await prisma.user.findFirst({
+      where: { OR: [{ email }, { googleId }] },
+    });
+
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          mobile: '',
+          email,
+          googleId,
+          role: 'CUSTOMER',
+          profile: {
+            create: { fullName: name || '' }
+          }
+        },
+      });
+    } else {
+      if (!user.googleId) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { googleId },
+        });
+      }
+      if (!user.email && email) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { email },
+        });
+      }
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, mobile: user.mobile, role: user.role },
+      process.env.JWT_SECRET || 'secret',
+      { expiresIn: '30d' }
+    );
+
+    res.status(200).json({
+      success: true,
+      token,
+      role: user.role,
+      userId: user.id,
+      email: user.email,
+    });
+  } catch (error: any) {
+    console.error('Google Auth Verification Error:', error);
+    res.status(401).json({ success: false, message: 'Invalid or expired Google token' });
   }
 };
 

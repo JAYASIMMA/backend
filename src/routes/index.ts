@@ -20,6 +20,7 @@ router.post('/auth/firebase-verify', authController.verifyFirebaseToken);
 router.post('/auth/login', authController.loginPassword);
 router.post('/auth/check-user', authController.checkUserRole);
 router.post('/auth/sp/signup', spController.signup);
+router.post('/auth/google', authController.verifyGoogleToken);
 router.post('/auth/fcm-token', authenticate, authController.saveFcmToken);
 
 // Public Passport View (Global)

@@ -19,16 +19,16 @@ async function main() {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // Create or Update the SuperAdmin
+    // Create or Update the Admin
     const admin = await prisma.user.upsert({
       where: { mobile },
       update: {
-        role: 'SUPER_ADMIN',
+        role: 'ADMIN',
         passwordHash,
       },
       create: {
         mobile,
-        role: 'SUPER_ADMIN',
+        role: 'ADMIN',
         passwordHash,
       },
     });
