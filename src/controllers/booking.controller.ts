@@ -352,7 +352,22 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
       }
     } else if (req.role === 'CUSTOMER') {
-      if (booking.status === 'TEMP_COMPLETED') {
+      if (status === 'TEMP_COMPLETED' && (booking.status === 'WORK_STARTED' || booking.status === 'TEMP_WORK_STARTED')) {
+        const completionOtp = booking.completionOtp || Math.floor(1000 + Math.random() * 9000).toString();
+        const updateData: any = { status, completionOtp };
+        if (amountPaid !== undefined) {
+          updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : amountPaid;
+        }
+        if (optedServices !== undefined) {
+          updateData.optedServices = optedServices;
+        }
+
+        await prisma.serviceRequest.update({
+          where: { id },
+          data: updateData,
+        });
+        console.log(`[BOOKING] Mission ${id} marked for completion by customer. Completion OTP: ${completionOtp}`);
+      } else if (booking.status === 'TEMP_COMPLETED') {
         const updateData: any = {};
         if (amountPaid !== undefined) {
           updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : amountPaid;
@@ -433,6 +448,45 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           await sendSinglePush(customerFcmToken, dataPayload);
         } catch (fcmErr) {
           console.error('[FCM] Error sending return push to customer:', fcmErr);
+        }
+      })();
+    }
+
+    // Send worker push notification on customer actions
+    if (req.role === 'CUSTOMER' && updatedBooking && updatedBooking.sp?.fcmToken) {
+      const spFcmToken = updatedBooking.sp.fcmToken;
+      const spId = updatedBooking.spId;
+      (async () => {
+        try {
+          const currentStatus = updatedBooking.status;
+          
+          let alertTitle = 'Mission Update';
+          let alertBody = `Customer has updated the mission status to ${currentStatus}.`;
+
+          if (currentStatus === 'TEMP_COMPLETED') {
+            alertTitle = 'Finishing PIN Generated! 🔑';
+            alertBody = `Customer has finished work. Use completion PIN ${updatedBooking.completionOtp || ''} to complete.`;
+          } else if (currentStatus === 'COMPLETED') {
+            alertTitle = 'Mission Completed! ✅';
+            alertBody = 'Your service mission has been fully completed. Thank you!';
+          }
+
+          console.log(`[FCM] Sending update notification to SP ${spId} for status "${currentStatus}"...`);
+          
+          const dataPayload = {
+            click_action: 'FLUTTER_NOTIFICATION_CLICK',
+            type: 'SP_ALARM',
+            bookingId: updatedBooking.id,
+            title: alertTitle,
+            body: alertBody,
+            status: currentStatus,
+            startOtp: updatedBooking.startOtp || '',
+            completionOtp: updatedBooking.completionOtp || ''
+          };
+
+          await sendSinglePush(spFcmToken, dataPayload);
+        } catch (fcmErr) {
+          console.error('[FCM] Error sending return push to SP:', fcmErr);
         }
       })();
     }

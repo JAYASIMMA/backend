@@ -490,9 +490,14 @@ export const updateDutyStatus = async (req: any, res: Response) => {
 
     try {
         // FORCE ALWAYS ONLINE: Ignoring incoming dutyStatus and setting to true
-        const updatedProfile = await prisma.serviceProviderProfile.update({
+        const updatedProfile = await prisma.serviceProviderProfile.upsert({
             where: { userId },
-            data: { dutyStatus: true } as any
+            update: { dutyStatus: true },
+            create: {
+                userId,
+                dutyStatus: true,
+                isVerified: false
+            } as any
         });
 
         res.status(200).json({ 
@@ -518,12 +523,20 @@ export const updateLiveLocation = async (req: any, res: Response) => {
     }
 
     try {
-        await prisma.serviceProviderProfile.update({
+        await prisma.serviceProviderProfile.upsert({
             where: { userId },
-            data: { 
+            update: { 
                 latitude: parseFloat(lat),
                 longitude: parseFloat(lng),
                 locationUpdatedAt: new Date()
+            },
+            create: {
+                userId,
+                latitude: parseFloat(lat),
+                longitude: parseFloat(lng),
+                locationUpdatedAt: new Date(),
+                dutyStatus: true,
+                isVerified: false
             } as any
         });
 

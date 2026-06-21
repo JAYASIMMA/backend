@@ -2,6 +2,34 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { getPresignedUrl, uploadFile, getSignedAssetUrl } from '../services/s3.service';
+import * as firebaseAdmin from 'firebase-admin';
+
+const sendSinglePush = async (token: string, data: Record<string, string>) => {
+  if (!token) return;
+  const payload = {
+    token,
+    data,
+    android: {
+      priority: 'high' as const,
+    },
+    apns: {
+      payload: {
+        aps: {
+          contentAvailable: true,
+        },
+      },
+      headers: {
+        'apns-priority': '10',
+      },
+    },
+  };
+  try {
+    const response = await firebaseAdmin.messaging().send(payload);
+    console.log(`[FCM-ADMIN] Success sending push:`, response);
+  } catch (error) {
+    console.error('[FCM-ADMIN] Push send error:', error);
+  }
+};
 
 // Dashboard Stats
 export const getDashboardStats = async (req: Request, res: Response) => {
@@ -150,17 +178,173 @@ export const getAllRequests = async (req: Request, res: Response) => {
 
 export const updateRequestStatus = async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, amountPaid, optedServices, completionOtp } = req.body;
     try {
+        const booking = await prisma.serviceRequest.findUnique({
+            where: { id },
+            include: {
+                customer: { include: { profile: true } },
+                sp: { include: { profile: true } }
+            }
+        });
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: 'Booking not found' });
+        }
+
+        const updateData: any = {};
+        if (status !== undefined) {
+            updateData.status = status;
+        }
+
+        // Generate startOtp if transitioning to ACCEPTED/TEMP_WORK_STARTED and it doesn't exist
+        if (status === 'ACCEPTED' || status === 'TEMP_WORK_STARTED') {
+            updateData.startOtp = booking.startOtp || Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        // Generate completionOtp if transitioning to TEMP_COMPLETED and it doesn't exist
+        if (status === 'TEMP_COMPLETED') {
+            updateData.completionOtp = booking.completionOtp || completionOtp || Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        // Allow explicit generation of completionOtp even if status remains the same
+        if (completionOtp !== undefined) {
+            updateData.completionOtp = completionOtp;
+        }
+
+        if (amountPaid !== undefined) {
+            updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : amountPaid;
+        }
+
+        if (optedServices !== undefined) {
+            updateData.optedServices = optedServices;
+        }
+
         const updated = await prisma.serviceRequest.update({
             where: { id },
-            data: { status }
+            data: updateData,
+            include: {
+                customer: { include: { profile: true } },
+                sp: { include: { profile: true } },
+                category: true,
+                subCategory: true,
+                location: {
+                    select: {
+                        id: true,
+                        addressLine: true,
+                        city: true,
+                        pincode: true,
+                        label: true
+                    }
+                },
+                feedback: true
+            }
         });
+
+        // Duty status update on COMPLETED status
+        if (status === 'COMPLETED' && updated.spId) {
+            try {
+                await prisma.serviceProviderProfile.update({
+                    where: { userId: updated.spId },
+                    data: { dutyStatus: true } as any
+                });
+            } catch (err) {
+                console.error('[ADMIN] Error updating SP duty status on completion:', err);
+            }
+        }
+
+        // Send Push Notifications in background
+        (async () => {
+            try {
+                const currentStatus = updated.status;
+                const startPin = updated.startOtp || '';
+                const endPin = updated.completionOtp || '';
+                const spName = updated.sp?.profile?.fullName || 'A Service Professional';
+
+                // 1. Notify Customer
+                if (updated.customer?.fcmToken) {
+                    let customerTitle = 'Mission Update';
+                    let customerBody = `Your booking status has been updated to ${currentStatus}.`;
+
+                    if (currentStatus === 'ACCEPTED') {
+                        customerTitle = 'Mission Accepted! 🛠️';
+                        customerBody = `${spName} has accepted your request. Start PIN: ${startPin}`;
+                    } else if (currentStatus === 'TEMP_WORK_STARTED') {
+                        customerTitle = 'Professional Arrived! 📍';
+                        customerBody = 'Your professional has arrived at your location. Please share the start PIN with them.';
+                    } else if (currentStatus === 'WORK_STARTED') {
+                        customerTitle = 'Work Started! ⚡';
+                        customerBody = 'Your service has officially begun.';
+                    } else if (currentStatus === 'TEMP_COMPLETED') {
+                        customerTitle = 'Work Finished! 🎉';
+                        customerBody = `The service is complete. Please share completion PIN ${endPin} to authorize.`;
+                    } else if (currentStatus === 'COMPLETED') {
+                        customerTitle = 'Mission Complete! ✅';
+                        customerBody = 'Your service has been fully completed. Thank you!';
+                    } else if (currentStatus === 'CANCELLED') {
+                        customerTitle = 'Mission Cancelled ❌';
+                        customerBody = 'Your booking has been cancelled by administration.';
+                    }
+
+                    await sendSinglePush(updated.customer.fcmToken, {
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+                        type: 'CUSTOMER_ALARM',
+                        bookingId: updated.id,
+                        title: customerTitle,
+                        body: customerBody,
+                        status: currentStatus,
+                        startOtp: startPin,
+                        completionOtp: endPin
+                    });
+                }
+
+                // 2. Notify SP
+                if (updated.sp?.fcmToken) {
+                    let spTitle = 'Mission Update';
+                    let spBody = `Your booking status has been updated to ${currentStatus}.`;
+
+                    if (currentStatus === 'ACCEPTED') {
+                        spTitle = 'Mission Assigned! 🛠️';
+                        spBody = `Admin has assigned you a service mission. Start PIN: ${startPin}`;
+                    } else if (currentStatus === 'TEMP_WORK_STARTED') {
+                        spTitle = 'Mission Update';
+                        spBody = 'Status updated to Arrived. Please get the Start PIN from the customer.';
+                    } else if (currentStatus === 'WORK_STARTED') {
+                        spTitle = 'Work Started! ⚡';
+                        spBody = 'Admin has verified the start PIN. You can now begin work.';
+                    } else if (currentStatus === 'TEMP_COMPLETED') {
+                        spTitle = 'Finishing PIN Generated! 🔑';
+                        spBody = `Completion PIN ${endPin} has been generated by admin.`;
+                    } else if (currentStatus === 'COMPLETED') {
+                        spTitle = 'Mission Completed! ✅';
+                        spBody = 'Admin has verified and completed the service mission.';
+                    } else if (currentStatus === 'CANCELLED') {
+                        spTitle = 'Mission Cancelled ❌';
+                        spBody = 'This request has been terminated by administration.';
+                    }
+
+                    await sendSinglePush(updated.sp.fcmToken, {
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+                        type: 'SP_ALARM',
+                        bookingId: updated.id,
+                        title: spTitle,
+                        body: spBody,
+                        status: currentStatus,
+                        startOtp: startPin,
+                        completionOtp: endPin
+                    });
+                }
+            } catch (fcmErr) {
+                console.error('[ADMIN] FCM broadcast error:', fcmErr);
+            }
+        })();
+
         res.status(200).json({ success: true, data: updated });
     } catch (error) {
+        console.error('Status adjustment failed:', error);
         res.status(500).json({ success: false, message: 'Status adjustment failed' });
     }
-}
+};
 
 // Feedback & Audits
 export const getAudits = async (req: Request, res: Response) => {
