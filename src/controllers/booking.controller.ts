@@ -358,28 +358,32 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         ]);
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
       }
-    } else if (req.role === 'CUSTOMER') {
+    } else if (req.role === 'CUSTOMER' || req.userId === booking.customerId) {
+      // FIX: Also allow users who are the booking's actual customer (handles ADMIN role users who are also customers)
+      console.log(`[BOOKING] Customer branch entered. req.role=${req.role}, req.userId=${req.userId}, booking.customerId=${booking.customerId}, status=${status}, amountPaid=${amountPaid}`);
+
       if (status === 'TEMP_COMPLETED' && (booking.status === 'ACCEPTED' || booking.status === 'TEMP_WORK_STARTED' || booking.status === 'WORK_STARTED')) {
         const completionOtp = booking.completionOtp || Math.floor(1000 + Math.random() * 9000).toString();
         const updateData: any = { status, completionOtp };
-        if (amountPaid !== undefined) {
-          updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : amountPaid;
+        if (amountPaid !== undefined && amountPaid !== null) {
+          updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : Number(amountPaid);
         }
-        if (optedServices !== undefined) {
+        if (optedServices !== undefined && optedServices !== null) {
           updateData.optedServices = optedServices;
         }
 
+        console.log(`[BOOKING] Writing updateData to DB for mission ${id}:`, JSON.stringify(updateData));
         await prisma.serviceRequest.update({
           where: { id },
           data: updateData,
         });
-        console.log(`[BOOKING] Mission ${id} marked for completion by customer. Completion OTP: ${completionOtp}`);
+        console.log(`[BOOKING] Mission ${id} marked for completion by customer. Completion OTP: ${completionOtp}, amountPaid: ${updateData.amountPaid}`);
       } else if (booking.status === 'TEMP_COMPLETED') {
         const updateData: any = {};
-        if (amountPaid !== undefined) {
-          updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : amountPaid;
+        if (amountPaid !== undefined && amountPaid !== null) {
+          updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : Number(amountPaid);
         }
-        if (optedServices !== undefined) {
+        if (optedServices !== undefined && optedServices !== null) {
           updateData.optedServices = optedServices;
         }
         if (!booking.completionOtp) {
@@ -387,11 +391,12 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         }
 
         if (Object.keys(updateData).length > 0) {
+          console.log(`[BOOKING] Writing updateData to DB for mission ${id}:`, JSON.stringify(updateData));
           await prisma.serviceRequest.update({
             where: { id },
             data: updateData,
           });
-          console.log(`[BOOKING] Customer updated completion details for mission ${id}:`, updateData);
+          console.log(`[BOOKING] Customer updated completion details for mission ${id}:`, JSON.stringify(updateData));
         }
       }
     }
