@@ -275,6 +275,44 @@ export const getBroadcasts = async (req: any, res: Response) => {
     }
   };
 
+const enrichRequestForSP = async (b: any) => {
+  if (!b) return null;
+  
+  // Sign audio URL
+  const audioMessageUrl = b.audioMessageUrl ? await getSignedAssetUrl(b.audioMessageUrl) : null;
+  
+  // Sign customer profile picture
+  let customer = b.customer;
+  if (customer && customer.profile) {
+    customer = {
+      ...customer,
+      profile: {
+        ...customer.profile,
+        profilePictureUrl: customer.profile.profilePictureUrl ? await getSignedAssetUrl(customer.profile.profilePictureUrl) : null
+      }
+    };
+  }
+
+  // Sign SP profile picture
+  let sp = b.sp;
+  if (sp && sp.profile) {
+    sp = {
+      ...sp,
+      profile: {
+        ...sp.profile,
+        profilePictureUrl: sp.profile.profilePictureUrl ? await getSignedAssetUrl(sp.profile.profilePictureUrl) : null
+      }
+    };
+  }
+
+  return {
+    ...b,
+    audioMessageUrl,
+    customer,
+    sp
+  };
+};
+
 /**
  * Dashboard Statistics for Service Provider
  */
@@ -380,7 +418,7 @@ export const getDashboardStats = async (req: any, res: Response) => {
                 immediate: immediateTasks,
                 later: laterTasks,
                 activeJobsCount: activeJob ? 1 : 0,
-                activeJob: activeJob || null,
+                activeJob: activeJob ? await enrichRequestForSP(activeJob) : null,
                 isCurrentlyWorking: !!currentJob,
                 totalCompleted,
                 rating: parseFloat(avgRating),
@@ -423,12 +461,7 @@ export const getServiceHistory = async (req: any, res: Response) => {
             orderBy: { createdAt: 'desc' }
         });
 
-        const enrichedHistory = await Promise.all(history.map(async (h: any) => {
-            return {
-                ...h,
-                audioMessageUrl: await getSignedAssetUrl(h.audioMessageUrl)
-            };
-        }));
+        const enrichedHistory = await Promise.all(history.map(enrichRequestForSP));
 
         res.status(200).json({ success: true, data: enrichedHistory });
     } catch (error) {
@@ -464,9 +497,23 @@ export const getSPFeedbacks = async (req: Request, res: Response) => {
 
         // Sign any audio feedback URLs if they exist
         const processedFeedbacks = await Promise.all(feedbacks.map(async (f: any) => {
+            let customer = f.request?.customer;
+            if (customer && customer.profile) {
+                customer = {
+                    ...customer,
+                    profile: {
+                        ...customer.profile,
+                        profilePictureUrl: customer.profile.profilePictureUrl ? await getSignedAssetUrl(customer.profile.profilePictureUrl) : null
+                    }
+                };
+            }
             return {
                 ...f,
-                audioFeedbackUrl: await getSignedAssetUrl(f.audioFeedbackUrl)
+                audioFeedbackUrl: await getSignedAssetUrl(f.audioFeedbackUrl),
+                request: f.request ? {
+                    ...f.request,
+                    customer
+                } : null
             };
         }));
 

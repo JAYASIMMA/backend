@@ -66,7 +66,7 @@ const sendSinglePush = async (token: string, data: Record<string, string>) => {
 const enrichAndProcessBooking = async (b: any) => {
   if (!b) return null;
   let locationWithCoords = b.location;
-  
+
   if (b.locationId) {
     try {
       const coords: any[] = await prisma.$queryRaw`
@@ -74,7 +74,7 @@ const enrichAndProcessBooking = async (b: any) => {
         FROM "Address" 
         WHERE id = ${b.locationId}
       `;
-      
+
       if (coords && coords.length > 0) {
         locationWithCoords = {
           ...b.location,
@@ -93,6 +93,13 @@ const enrichAndProcessBooking = async (b: any) => {
     ...b,
     location: locationWithCoords,
     audioMessageUrl: signedAudioUrl,
+    customer: b.customer ? {
+      ...b.customer,
+      profile: b.customer.profile ? {
+        ...b.customer.profile,
+        profilePictureUrl: b.customer.profile.profilePictureUrl ? await getSignedAssetUrl(b.customer.profile.profilePictureUrl) : null
+      } : null
+    } : null,
     sp: b.sp ? {
       ...b.sp,
       profile: b.sp.profile ? {
@@ -113,7 +120,7 @@ export const createBooking = async (req: any, res: Response) => {
   }
 
   console.log(`[CREATE BOOKING] Initiated by user: ${req.userId} for category: ${categoryId}`);
-  
+
   try {
     // If a file is uploaded (voice instruction), send it to S3
     if (req.file) {
@@ -145,7 +152,7 @@ export const createBooking = async (req: any, res: Response) => {
     });
 
     console.log(`[CREATE BOOKING] Successfully created booking ID: ${booking.id}`);
-    
+
     // Dispatch FCM notifications to matched workers in the background
     (async () => {
       try {
@@ -228,9 +235,9 @@ export const getActiveBookings = async (req: any, res: Response) => {
           include: { profile: true }
         },
         sp: {
-          include: { 
+          include: {
             profile: true,
-            spProfile: true 
+            spProfile: true
           }
         }
       },
@@ -282,24 +289,24 @@ export const updateBookingStatus = async (req: any, res: Response) => {
       if (status === 'ACCEPTED' && booking.status === 'PENDING') {
         // Concurrency check: At most 5 accepted/active requests
         const activeCount = await prisma.serviceRequest.count({
-            where: {
-                spId: req.userId,
-                status: { in: ['ACCEPTED', 'TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED'] }
-            }
+          where: {
+            spId: req.userId,
+            status: { in: ['ACCEPTED', 'TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED'] }
+          }
         });
 
         if (activeCount >= 5) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'You cannot accept more than 5 active missions. Please complete current ones first.' 
-            });
+          return res.status(400).json({
+            success: false,
+            message: 'You cannot accept more than 5 active missions. Please complete current ones first.'
+          });
         }
 
         // When SP accepts, generate a 4-digit numeric startOtp
         const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.serviceRequest.update({
-            where: { id },
-            data: { status, spId: req.userId, startOtp },
+          where: { id },
+          data: { status, spId: req.userId, startOtp },
         });
         console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}. Duty Status: REMAINS ON`);
       } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
@@ -352,7 +359,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
       }
     } else if (req.role === 'CUSTOMER') {
-      if (status === 'TEMP_COMPLETED' && (booking.status === 'WORK_STARTED' || booking.status === 'TEMP_WORK_STARTED')) {
+      if (status === 'TEMP_COMPLETED' && (booking.status === 'ACCEPTED' || booking.status === 'TEMP_WORK_STARTED' || booking.status === 'WORK_STARTED')) {
         const completionOtp = booking.completionOtp || Math.floor(1000 + Math.random() * 9000).toString();
         const updateData: any = { status, completionOtp };
         if (amountPaid !== undefined) {
@@ -375,6 +382,9 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         if (optedServices !== undefined) {
           updateData.optedServices = optedServices;
         }
+        if (!booking.completionOtp) {
+          updateData.completionOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        }
 
         if (Object.keys(updateData).length > 0) {
           await prisma.serviceRequest.update({
@@ -393,11 +403,11 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         subCategory: true,
         location: true,
         customer: { include: { profile: true } },
-        sp: { 
-          include: { 
+        sp: {
+          include: {
             profile: true,
             spProfile: true
-          } 
+          }
         }
       }
     });
@@ -410,7 +420,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         try {
           const customerFcmToken = updatedBooking.customer.fcmToken!;
           const currentStatus = updatedBooking.status;
-          
+
           let alertTitle = 'Mission Update';
           let alertBody = `Your booking status has been updated to ${currentStatus}.`;
 
@@ -433,7 +443,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }
 
           console.log(`[FCM] Sending return notification to customer ${updatedBooking.customerId} for status "${currentStatus}"...`);
-          
+
           const dataPayload = {
             click_action: 'FLUTTER_NOTIFICATION_CLICK',
             type: 'CUSTOMER_ALARM',
@@ -459,7 +469,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
       (async () => {
         try {
           const currentStatus = updatedBooking.status;
-          
+
           let alertTitle = 'Mission Update';
           let alertBody = `Customer has updated the mission status to ${currentStatus}.`;
 
@@ -472,7 +482,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }
 
           console.log(`[FCM] Sending update notification to SP ${spId} for status "${currentStatus}"...`);
-          
+
           const dataPayload = {
             click_action: 'FLUTTER_NOTIFICATION_CLICK',
             type: 'SP_ALARM',
@@ -522,9 +532,9 @@ export const cancelBooking = async (req: any, res: Response) => {
     // Cancellation Policy: Cannot cancel once work has officially started OR once the worker has arrived (TEMP_WORK_STARTED)
     const nonCancellableStatuses = ['TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED', 'COMPLETED', 'CANCELLED'];
     if (nonCancellableStatuses.includes(booking.status)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Booking cannot be cancelled in its current state: ${booking.status}` 
+      return res.status(400).json({
+        success: false,
+        message: `Booking cannot be cancelled in its current state: ${booking.status}`
       });
     }
 
@@ -570,6 +580,9 @@ export const getBookingHistory = async (req: any, res: Response) => {
         category: true,
         subCategory: true,
         location: true,
+        customer: {
+          include: { profile: true }
+        },
         sp: {
           include: { profile: true }
         },

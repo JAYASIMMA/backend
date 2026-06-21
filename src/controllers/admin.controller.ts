@@ -170,7 +170,18 @@ export const getAllRequests = async (req: Request, res: Response) => {
       },
       orderBy: { createdAt: 'desc' }
     });
-    res.status(200).json({ success: true, data: requests });
+
+    const enrichedRequests = await Promise.all(requests.map(async (r: any) => {
+        if (r.customer?.profile?.profilePictureUrl) {
+            r.customer.profile.profilePictureUrl = await getSignedAssetUrl(r.customer.profile.profilePictureUrl);
+        }
+        if (r.sp?.profile?.profilePictureUrl) {
+            r.sp.profile.profilePictureUrl = await getSignedAssetUrl(r.sp.profile.profilePictureUrl);
+        }
+        return r;
+    }));
+
+    res.status(200).json({ success: true, data: enrichedRequests });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
@@ -338,6 +349,13 @@ export const updateRequestStatus = async (req: Request, res: Response) => {
                 console.error('[ADMIN] FCM broadcast error:', fcmErr);
             }
         })();
+
+        if (updated.customer?.profile?.profilePictureUrl) {
+            updated.customer.profile.profilePictureUrl = await getSignedAssetUrl(updated.customer.profile.profilePictureUrl);
+        }
+        if (updated.sp?.profile?.profilePictureUrl) {
+            updated.sp.profile.profilePictureUrl = await getSignedAssetUrl(updated.sp.profile.profilePictureUrl);
+        }
 
         res.status(200).json({ success: true, data: updated });
     } catch (error) {
