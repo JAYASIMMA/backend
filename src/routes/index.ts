@@ -41,6 +41,7 @@ router.delete('/customer/addresses/:id', authenticate, authorize(['CUSTOMER']), 
 router.post('/bookings', authenticate, authorize(['CUSTOMER']), upload.single('audio'), bookingController.createBooking);
 router.get('/bookings/active', authenticate, bookingController.getActiveBookings);
 router.get('/bookings/history', authenticate, bookingController.getBookingHistory);
+router.get('/bookings/:id', authenticate, bookingController.getBookingById);
 router.patch('/bookings/:id/status', authenticate, bookingController.updateBookingStatus);
 router.post('/bookings/:id/cancel', authenticate, bookingController.cancelBooking);
 router.post('/bookings/:requestId/feedback', authenticate, authorize(['CUSTOMER']), bookingController.submitFeedback);

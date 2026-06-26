@@ -625,3 +625,38 @@ export const submitFeedback = async (req: any, res: Response) => {
     res.status(500).json({ success: false, message: 'Internal server error', debug: error.message });
   }
 };
+
+export const getBookingById = async (req: any, res: Response) => {
+  const { id } = req.params;
+  try {
+    const booking = await prisma.serviceRequest.findUnique({
+      where: { id },
+      include: {
+        category: true,
+        subCategory: true,
+        location: true,
+        customer: { include: { profile: true } },
+        sp: {
+          include: {
+            profile: true,
+            spProfile: true
+          }
+        }
+      }
+    });
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    if (booking.customerId !== req.userId && booking.spId !== req.userId && req.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Unauthorized access' });
+    }
+
+    const responseData = await enrichAndProcessBooking(booking);
+    res.status(200).json({ success: true, data: responseData });
+  } catch (error) {
+    console.error('[GET BOOKING BY ID] Error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
