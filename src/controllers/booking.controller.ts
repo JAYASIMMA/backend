@@ -302,16 +302,15 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           });
         }
 
-        // When SP accepts, generate a 4-digit numeric startOtp
-        const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        // When SP accepts, status is updated and spId is set.
         await prisma.serviceRequest.update({
           where: { id },
-          data: { status, spId: req.userId, startOtp },
+          data: { status, spId: req.userId },
         });
-        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Start OTP: ${startOtp}. Duty Status: REMAINS ON`);
+        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Duty Status: REMAINS ON`);
       } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
-        // Worker arrives at location. NOW disable duty status for new requests.
-        const startOtp = booking.startOtp || Math.floor(1000 + Math.random() * 9000).toString();
+        // Worker arrives at location. Now disable duty status and generate startOtp.
+        const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.$transaction([
           prisma.serviceRequest.update({
             where: { id },
@@ -322,7 +321,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
             data: { dutyStatus: true } // Keep online even when working
           })
         ]);
-        console.log(`[BOOKING] Mission ${id} marked as ARRIVED. Duty Status set to OFF.`);
+        console.log(`[BOOKING] Mission ${id} marked as ARRIVED. Start OTP generated: ${startOtp}. Duty Status set to OFF.`);
       } else if (status === 'WORK_STARTED' && booking.status === 'TEMP_WORK_STARTED') {
         // Actual work start happens ONLY with correct OTP
         if (otp !== booking.startOtp) {
@@ -333,14 +332,13 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           data: { status },
         });
       } else if (status === 'TEMP_COMPLETED' && (booking.status === 'WORK_STARTED' || booking.status === 'TEMP_WORK_STARTED')) {
-        // When worker finishes, generate a 4-digit completionOtp
-        // FALLBACK: Always ensure a completionOtp exists
-        const completionOtp = booking.completionOtp || Math.floor(1000 + Math.random() * 9000).toString();
+        // When worker finishes, status becomes TEMP_COMPLETED.
+        // The completionOtp must remain null until the customer enters the amount.
         await prisma.serviceRequest.update({
           where: { id },
-          data: { status, completionOtp },
+          data: { status },
         });
-        console.log(`[BOOKING] Mission ${id} marked for completion. Completion OTP: ${completionOtp}`);
+        console.log(`[BOOKING] Mission ${id} marked for completion by SP. Waiting for customer details.`);
       } else if (status === 'COMPLETED' && booking.status === 'TEMP_COMPLETED') {
         // Final completion happens ONLY with correct PIN
         if (otp !== booking.completionOtp) {
