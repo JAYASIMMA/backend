@@ -359,45 +359,37 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
       }
     } else if (req.role === 'CUSTOMER' || req.userId === booking.customerId) {
-      // FIX: Also allow users who are the booking's actual customer (handles ADMIN role users who are also customers)
-      console.log(`[BOOKING] Customer branch entered. req.role=${req.role}, req.userId=${req.userId}, booking.customerId=${booking.customerId}, status=${status}, amountPaid=${amountPaid}`);
+      // Customers CANNOT set TEMP_COMPLETED themselves — only the SP marks "Finish Work".
+      // The customer's role here is ONLY to provide payment details and generate the completion OTP
+      // once the booking is ALREADY in TEMP_COMPLETED (i.e., the SP has confirmed finishing work).
+      console.log(`[BOOKING] Customer branch entered. req.role=${req.role}, req.userId=${req.userId}, booking.customerId=${booking.customerId}, currentBookingStatus=${booking.status}, amountPaid=${amountPaid}`);
 
-      if (status === 'TEMP_COMPLETED' && (booking.status === 'ACCEPTED' || booking.status === 'TEMP_WORK_STARTED' || booking.status === 'WORK_STARTED')) {
-        const completionOtp = booking.completionOtp || Math.floor(1000 + Math.random() * 9000).toString();
-        const updateData: any = { status, completionOtp };
-        if (amountPaid !== undefined && amountPaid !== null) {
-          updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : Number(amountPaid);
-        }
-        if (optedServices !== undefined && optedServices !== null) {
-          updateData.optedServices = optedServices;
-        }
-
-        console.log(`[BOOKING] Writing updateData to DB for mission ${id}:`, JSON.stringify(updateData));
-        await prisma.serviceRequest.update({
-          where: { id },
-          data: updateData,
-        });
-        console.log(`[BOOKING] Mission ${id} marked for completion by customer. Completion OTP: ${completionOtp}, amountPaid: ${updateData.amountPaid}`);
-      } else if (booking.status === 'TEMP_COMPLETED') {
+      if (booking.status === 'TEMP_COMPLETED') {
+        // SP has already finished work. Customer now provides payment details & generates the completion OTP.
         const updateData: any = {};
+
         if (amountPaid !== undefined && amountPaid !== null) {
           updateData.amountPaid = typeof amountPaid === 'string' ? parseFloat(amountPaid) : Number(amountPaid);
         }
         if (optedServices !== undefined && optedServices !== null) {
           updateData.optedServices = optedServices;
         }
+
+        // Generate a fresh completionOtp if one hasn't been set yet.
         if (!booking.completionOtp) {
           updateData.completionOtp = Math.floor(1000 + Math.random() * 9000).toString();
         }
 
         if (Object.keys(updateData).length > 0) {
-          console.log(`[BOOKING] Writing updateData to DB for mission ${id}:`, JSON.stringify(updateData));
+          console.log(`[BOOKING] Customer providing payment details for mission ${id}:`, JSON.stringify(updateData));
           await prisma.serviceRequest.update({
             where: { id },
             data: updateData,
           });
-          console.log(`[BOOKING] Customer updated completion details for mission ${id}:`, JSON.stringify(updateData));
+          console.log(`[BOOKING] Mission ${id}: customer payment details saved. completionOtp=${updateData.completionOtp || booking.completionOtp}, amountPaid=${updateData.amountPaid}`);
         }
+      } else {
+        console.warn(`[BOOKING] Customer attempted to update mission ${id} in invalid state: ${booking.status}. Ignoring.`);
       }
     }
 
@@ -440,8 +432,8 @@ export const updateBookingStatus = async (req: any, res: Response) => {
             alertTitle = 'Work Started! ⚡';
             alertBody = 'Your service has officially begun.';
           } else if (currentStatus === 'TEMP_COMPLETED') {
-            alertTitle = 'Work Finished! 🎉';
-            alertBody = 'The service is complete. Please share the completion PIN to authorize.';
+            alertTitle = 'Work Completed! 🎉 Generate Finish OTP';
+            alertBody = 'Your service professional has finished the work. Please open the app, enter the payment amount, and generate the completion OTP to close the mission.';
           } else if (currentStatus === 'COMPLETED') {
             alertTitle = 'Mission Complete! ✅';
             alertBody = 'Your service has been fully completed. Thank you!';
@@ -479,8 +471,8 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           let alertBody = `Customer has updated the mission status to ${currentStatus}.`;
 
           if (currentStatus === 'TEMP_COMPLETED') {
-            alertTitle = 'Finishing PIN Generated! 🔑';
-            alertBody = `Customer has finished work. Use completion PIN ${updatedBooking.completionOtp || ''} to complete.`;
+            alertTitle = 'Completion PIN Ready! 🔑';
+            alertBody = `Customer has generated the completion PIN. Enter PIN ${updatedBooking.completionOtp || ''} to complete the mission.`;
           } else if (currentStatus === 'COMPLETED') {
             alertTitle = 'Mission Completed! ✅';
             alertBody = 'Your service mission has been fully completed. Thank you!';
