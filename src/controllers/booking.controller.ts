@@ -309,8 +309,9 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         });
         console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Duty Status: REMAINS ON`);
       } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
-        // Worker arrives at location. Now disable duty status and generate startOtp.
-        const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        // Worker arrives at location. Use the customer's pre-generated startOtp if it exists,
+        // otherwise generate a new one now.
+        const startOtp = (booking as any).startOtp || Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.$transaction([
           prisma.serviceRequest.update({
             where: { id },
@@ -357,12 +358,18 @@ export const updateBookingStatus = async (req: any, res: Response) => {
         console.log(`[BOOKING] Mission ${id} COMPLETED. Duty Status: OFF (Worker must manually toggle back to ON)`);
       }
     } else if (req.role === 'CUSTOMER' || req.userId === booking.customerId) {
-      // Customers CANNOT set TEMP_COMPLETED themselves — only the SP marks "Finish Work".
-      // The customer's role here is ONLY to provide payment details and generate the completion OTP
-      // once the booking is ALREADY in TEMP_COMPLETED (i.e., the SP has confirmed finishing work).
       console.log(`[BOOKING] Customer branch entered. req.role=${req.role}, req.userId=${req.userId}, booking.customerId=${booking.customerId}, currentBookingStatus=${booking.status}, amountPaid=${amountPaid}`);
 
-      if (booking.status === 'TEMP_COMPLETED') {
+      if (booking.status === 'ACCEPTED' && !booking.startOtp) {
+        // Customer generates the start OTP at the ACCEPTED stage so they can share it
+        // with the SP when the SP arrives. The SP enters it to begin work.
+        const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
+        await prisma.serviceRequest.update({
+          where: { id },
+          data: { startOtp },
+        });
+        console.log(`[BOOKING] Customer generated startOtp for mission ${id}: ${startOtp}`);
+      } else if (booking.status === 'TEMP_COMPLETED') {
         // SP has already finished work. Customer now provides payment details & generates the completion OTP.
         const updateData: any = {};
 
@@ -422,7 +429,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           if (currentStatus === 'ACCEPTED') {
             const spName = updatedBooking.sp?.profile?.fullName || 'A Service Professional';
             alertTitle = 'Mission Accepted! 🛠️';
-            alertBody = `${spName} has accepted your request. Start PIN: ${updatedBooking.startOtp || ''}`;
+            alertBody = `${spName} has accepted your request. Open the app to generate your Start PIN.`;
           } else if (currentStatus === 'TEMP_WORK_STARTED') {
             alertTitle = 'Professional Arrived! 📍';
             alertBody = 'Your professional has arrived at your location. Please share the start PIN with them.';
@@ -447,7 +454,6 @@ export const updateBookingStatus = async (req: any, res: Response) => {
             body: alertBody,
             status: currentStatus,
             startOtp: updatedBooking.startOtp || '',
-            completionOtp: updatedBooking.completionOtp || ''
           };
 
           await sendSinglePush(customerFcmToken, dataPayload);
@@ -485,8 +491,6 @@ export const updateBookingStatus = async (req: any, res: Response) => {
             title: alertTitle,
             body: alertBody,
             status: currentStatus,
-            startOtp: updatedBooking.startOtp || '',
-            completionOtp: updatedBooking.completionOtp || ''
           };
 
           await sendSinglePush(spFcmToken, dataPayload);

@@ -10,6 +10,11 @@ const s3Client = new S3Client({
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
   },
+  // Newer AWS SDK v3 versions append x-amz-checksum-mode=ENABLED to presigned
+  // GET URLs by default. Objects uploaded without checksums return 403 when that
+  // header is present. Setting both to WHEN_REQUIRED disables this behaviour.
+  requestChecksumCalculation: 'WHEN_REQUIRED' as any,
+  responseChecksumValidation: 'WHEN_REQUIRED' as any,
 });
 
 const bucketName = process.env.AWS_S3_BUCKET_NAME || 'fix-it-assets';
