@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 import * as admin from 'firebase-admin';
+import { broadcastBookingUpdate } from '../services/websocket.service';
 
 /**
  * Send a high-priority data-only multicast push notification to workers (SPs).
@@ -417,6 +418,11 @@ export const updateBookingStatus = async (req: any, res: Response) => {
 
     const responseData = await enrichAndProcessBooking(updatedBooking);
 
+    // Broadcast the update via WebSocket
+    if (updatedBooking) {
+      broadcastBookingUpdate(id, responseData);
+    }
+
     // Send customer return push notification on worker actions
     if (req.role === 'SP' && updatedBooking && updatedBooking.customer?.fcmToken) {
       (async () => {
@@ -558,6 +564,31 @@ export const cancelBooking = async (req: any, res: Response) => {
         })
       ] : [])
     ]);
+
+    // Broadcast the cancellation update via WebSocket
+    try {
+      const updatedBooking = await prisma.serviceRequest.findUnique({
+        where: { id },
+        include: {
+          category: true,
+          subCategory: true,
+          location: true,
+          customer: { include: { profile: true } },
+          sp: {
+            include: {
+              profile: true,
+              spProfile: true
+            }
+          }
+        }
+      });
+      if (updatedBooking) {
+        const responseData = await enrichAndProcessBooking(updatedBooking);
+        broadcastBookingUpdate(id, responseData);
+      }
+    } catch (err) {
+      console.error('[CANCEL_BOOKING] WebSocket broadcast error:', err);
+    }
 
     return res.status(200).json({ success: true, message: 'Booking cancelled successfully' });
   } catch (error: any) {

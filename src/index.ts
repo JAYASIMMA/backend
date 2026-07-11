@@ -3,6 +3,7 @@ dotenv.config();
 import os from 'os';
 import app from './app';
 import { startTimeoutChecker } from './services/timeout.service';
+import { initWebSocketServer } from './services/websocket.service';
 
 const PORT = process.env.PORT || 3000;
 
@@ -19,7 +20,7 @@ const getLocalIps = () => {
   return ips.length > 0 ? ips : ['localhost'];
 };
 
-app.listen(Number(PORT), '0.0.0.0', () => {
+const server = app.listen(Number(PORT), '0.0.0.0', () => {
   startTimeoutChecker();
   const localIps = getLocalIps();
   console.log(`\n🚀 [BACKEND] Server running on port ${PORT}`);
@@ -29,3 +30,5 @@ app.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`\n🔗 Production URL: https://api.specialnest.in/api/v1`);
   console.log(`🛠️  Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });
+
+initWebSocketServer(server);
