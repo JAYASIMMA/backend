@@ -302,12 +302,13 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           });
         }
 
-        // When SP accepts, status is updated and spId is set.
+        // When SP accepts, status is updated, spId is set, and startOtp is automatically generated.
+        const startOtp = Math.floor(1000 + Math.random() * 9000).toString();
         await prisma.serviceRequest.update({
           where: { id },
-          data: { status, spId: req.userId },
+          data: { status, spId: req.userId, startOtp },
         });
-        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. Duty Status: REMAINS ON`);
+        console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. startOtp auto-generated: ${startOtp}. Duty Status: REMAINS ON`);
       } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
         // Worker arrives at location. Use the customer's pre-generated startOtp if it exists,
         // otherwise generate a new one now.
