@@ -5,12 +5,25 @@ import fs from 'fs';
 
 dotenv.config();
 
-const serviceAccountPath = path.join(process.cwd(), 'inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json');
+const serviceAccountPaths = [
+  path.join(process.cwd(), 'inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json'),
+  path.join(process.cwd(), 'backend', 'inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json'),
+  path.join(__dirname, '../../inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json'),
+  path.join(__dirname, '../../../inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json')
+];
+
+let serviceAccountPath = '';
+for (const p of serviceAccountPaths) {
+  if (fs.existsSync(p)) {
+    serviceAccountPath = p;
+    break;
+  }
+}
 
 let credential;
 
-if (fs.existsSync(serviceAccountPath)) {
-  console.log('Firebase: Using service account JSON file.');
+if (serviceAccountPath) {
+  console.log(`Firebase: Using service account JSON file at: ${serviceAccountPath}`);
   credential = admin.credential.cert(serviceAccountPath);
 } else {
   console.log('Firebase: Using environment variables.');
