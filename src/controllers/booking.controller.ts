@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 import * as admin from 'firebase-admin';
-import { broadcastBookingUpdate, broadcastToUsers } from '../services/websocket.service';
+import { broadcastBookingUpdate, broadcastNewBooking, broadcastRemoveBroadcast } from '../services/websocket.service';
 
 /**
  * Send a high-priority data-only multicast push notification to workers (SPs).
@@ -63,46 +63,7 @@ const sendSinglePush = async (token: string, data: Record<string, string>) => {
   }
 };
 
-
-/**
- * Push a REMOVE_BROADCAST event to every SP matching a category/subCategory
- * (minus an optional excluded SP) so a request that's no longer up-for-grabs
- * (accepted / cancelled-while-pending / timed-out) instantly disappears from
- * everyone else's "opportunities" list instead of lingering until their next poll.
- */
-export const notifyOpportunityRemoved = async (
-  bookingId: string,
-  categoryName?: string | null,
-  subCategoryName?: string | null,
-  excludeSpId?: string | null
-) => {
-  if (!categoryName) return;
-  try {
-    const matchingSps = await prisma.user.findMany({
-      where: {
-        role: 'SP',
-        ...(excludeSpId ? { id: { not: excludeSpId } } : {}),
-        spProfile: {
-          OR: [
-            { categoryName },
-            { subCategoryName: categoryName },
-            ...(subCategoryName ? [
-              { categoryName: subCategoryName },
-              { subCategoryName: subCategoryName },
-            ] : []),
-          ],
-        },
-      },
-      select: { id: true },
-    });
-    const spIds = matchingSps.map((s) => s.id);
-    broadcastToUsers(spIds, { type: 'REMOVE_BROADCAST', bookingId });
-  } catch (err) {
-    console.error('[BOOKING] notifyOpportunityRemoved error:', err);
-  }
-};
-
-export const enrichAndProcessBooking = async (b: any) => {
+const enrichAndProcessBooking = async (b: any) => {
   if (!b) return null;
   let locationWithCoords = b.location;
 
@@ -148,7 +109,6 @@ export const enrichAndProcessBooking = async (b: any) => {
     } : null
   };
 };
-
 
 export const createBooking = async (req: any, res: Response) => {
   let { categoryId, subCategoryId, locationId, messageText, audioMessageUrl, scheduledAt } = req.body;
@@ -209,6 +169,7 @@ export const createBooking = async (req: any, res: Response) => {
           const workers = await prisma.user.findMany({
             where: {
               role: 'SP',
+              fcmToken: { not: null },
               spProfile: {
                 OR: [
                   { categoryName: targetCategory },
@@ -220,37 +181,10 @@ export const createBooking = async (req: any, res: Response) => {
                 ]
               }
             },
-            select: { id: true, fcmToken: true }
+            select: { fcmToken: true }
           });
 
-          // 1. Instant push over WebSocket to any SP currently connected —
-          // this is what makes the request pop up on the SP's phone immediately,
-          // without waiting on FCM delivery or the next broadcast-list poll.
-          const spIds = workers.map(w => w.id);
-          if (spIds.length > 0) {
-            const broadcastPreview = {
-              id: booking.id,
-              customerId: booking.customerId,
-              categoryId: booking.categoryId,
-              subCategoryId: booking.subCategoryId,
-              locationId: booking.locationId,
-              status: booking.status,
-              messageText: booking.messageText,
-              scheduledAt: booking.scheduledAt,
-              createdAt: booking.createdAt,
-              updatedAt: booking.updatedAt,
-              addressLine: booking.location?.addressLine,
-              label: booking.location?.label,
-              categoryName: targetCategory,
-              subCategoryName: targetSubCategory || null,
-              distance_meters: null,
-            };
-            broadcastToUsers(spIds, { type: 'NEW_BOOKING', data: broadcastPreview });
-          }
-
-          // 2. FCM push as a wake-up fallback for SPs whose app is backgrounded/closed
-          // or who don't currently have a live socket connection.
-          const tokens = workers.map(w => w.fcmToken as string).filter(t => !!t);
+          const tokens = workers.map(w => w.fcmToken as string).filter(t => t !== '');
           if (tokens.length > 0) {
             console.log(`[FCM] Found ${tokens.length} matching workers for category "${targetCategory}". Sending push notifications...`);
             const dataPayload = {
@@ -274,6 +208,11 @@ export const createBooking = async (req: any, res: Response) => {
 
     // Sign the URL and enrich coordinates for the response
     const responseData = await enrichAndProcessBooking(booking);
+
+    // Broadcast new booking to all connected SP users via WebSocket
+    if (responseData) {
+      broadcastNewBooking(responseData);
+    }
 
     res.status(201).json({ success: true, data: responseData });
   } catch (error) {
@@ -309,7 +248,6 @@ export const getActiveBookings = async (req: any, res: Response) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Process URLs and fetch coordinates for each booking
     const processedBookings = await Promise.all(bookings.map(enrichAndProcessBooking));
 
     res.status(200).json({ success: true, data: processedBookings });
@@ -322,11 +260,6 @@ export const getActiveBookings = async (req: any, res: Response) => {
 export const updateBookingStatus = async (req: any, res: Response) => {
   const { id } = req.params;
   const { status, otp, amountPaid, optedServices } = req.body;
-
-  // Tracks whether this transition should notify OTHER matching SPs that the
-  // mission is no longer up-for-grabs (accepted by someone / timed out), so
-  // their opportunity lists update live instead of on the next poll.
-  let removeOpportunityFor: { excludeSpId: string | null } | null = null;
 
   try {
     const booking = await prisma.serviceRequest.findUnique({
@@ -354,7 +287,6 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }
         })
       ]);
-      removeOpportunityFor = { excludeSpId: null };
       console.log(`[BOOKING] Mission ${id} TIMED_OUT by system/customer.`);
     } else if (req.role === 'SP') {
       if (status === 'ACCEPTED' && booking.status === 'PENDING') {
@@ -379,7 +311,6 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           where: { id },
           data: { status, spId: req.userId, startOtp },
         });
-        removeOpportunityFor = { excludeSpId: req.userId };
         console.log(`[BOOKING] Mission ${id} accepted by ${req.userId}. startOtp auto-generated: ${startOtp}. Duty Status: REMAINS ON`);
       } else if (status === 'TEMP_WORK_STARTED' && booking.status === 'ACCEPTED') {
         // Worker arrives at location. Use the customer's pre-generated startOtp if it exists,
@@ -492,17 +423,11 @@ export const updateBookingStatus = async (req: any, res: Response) => {
     // Broadcast the update via WebSocket
     if (updatedBooking) {
       broadcastBookingUpdate(id, responseData);
-    }
 
-    // If this transition took the mission off the market (accepted / timed out),
-    // tell every other matching SP to drop it from their opportunities list live.
-    if (removeOpportunityFor && updatedBooking) {
-      notifyOpportunityRemoved(
-        id,
-        updatedBooking.category?.name,
-        updatedBooking.subCategory?.name,
-        removeOpportunityFor.excludeSpId
-      );
+      const s = updatedBooking.status;
+      if (s === 'ACCEPTED' || s === 'CANCELLED' || s === 'TIMED_OUT') {
+        broadcastRemoveBroadcast(id);
+      }
     }
 
     // Send customer return push notification on worker actions
@@ -667,12 +592,7 @@ export const cancelBooking = async (req: any, res: Response) => {
       if (updatedBooking) {
         const responseData = await enrichAndProcessBooking(updatedBooking);
         broadcastBookingUpdate(id, responseData);
-
-        // If it was still PENDING (no SP assigned yet), it was visible in every
-        // matching SP's opportunities list — pull it down for all of them live.
-        if (booking.status === 'PENDING') {
-          notifyOpportunityRemoved(id, updatedBooking.category?.name, updatedBooking.subCategory?.name, null);
-        }
+        broadcastRemoveBroadcast(id);
       }
     } catch (err) {
       console.error('[CANCEL_BOOKING] WebSocket broadcast error:', err);
