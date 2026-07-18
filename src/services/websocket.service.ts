@@ -13,9 +13,30 @@ const allClients = new Set<WebSocket>();
 export const initWebSocketServer = (server: HTTPServer) => {
   const wss = new WebSocketServer({ server });
 
-  wss.on('connection', (ws: WebSocket) => {
+  // Heartbeat ping interval to prevent Nginx / AWS ALB / Mobile Carrier idle timeouts (30s)
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((ws: any) => {
+      if (ws.isAlive === false) {
+        console.log('[WEBSOCKET] Terminating inactive client due to missed heartbeat.');
+        return ws.terminate();
+      }
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
+
+  wss.on('connection', (ws: any) => {
     console.log('[WEBSOCKET] Client connected.');
+    ws.isAlive = true;
     allClients.add(ws);
+
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
 
     let subscribedUserId: string | null = null;
     const subscribedBookingIds = new Set<string>();
@@ -85,7 +106,7 @@ export const initWebSocketServer = (server: HTTPServer) => {
     });
   });
 
-  console.log('📡 [WEBSOCKET] Server initialized and attached to HTTP server');
+  console.log('📡 [WEBSOCKET] Server initialized with Ping/Pong Heartbeat and attached to HTTP server');
 };
 
 /**
@@ -163,4 +184,3 @@ export const broadcastBookingUpdate = (bookingId: string, bookingData: any) => {
     console.log(`[WEBSOCKET] No active subscribers for booking update: ${bookingId}`);
   }
 };
-
