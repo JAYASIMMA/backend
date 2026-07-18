@@ -1,5 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { RequestStatus } from '@prisma/client';
+import { broadcastBookingUpdate } from './websocket.service';
+import { enrichAndProcessBooking, notifyOpportunityRemoved } from '../controllers/booking.controller';
 
 /**
  * Service to automatically monitor and process service requests that have timed out.
@@ -33,12 +35,12 @@ export const startTimeoutChecker = () => {
         
         for (const request of pendingTimedOut) {
           try {
-            await prisma.$transaction(async (tx: any) => {
+            const didTimeOut = await prisma.$transaction(async (tx: any) => {
               const result = await tx.serviceRequest.updateMany({
                 where: { id: request.id, status: 'PENDING' },
                 data: { status: 'TIMED_OUT' as any }
               });
-              if (result.count === 0) return;
+              if (result.count === 0) return false;
 
               await tx.timedOutRequest.upsert({
                 where: { requestId: request.id },
@@ -48,8 +50,35 @@ export const startTimeoutChecker = () => {
                   reason: 'Automatic System Timeout: No professional accepted within the 5-minute window.'
                 }
               });
+              return true;
             });
-            console.log(`✅ [TIMEOUT SERVICE] Archived Request ID: ${request.id}`);
+
+            if (didTimeOut) {
+              console.log(`✅ [TIMEOUT SERVICE] Archived Request ID: ${request.id}`);
+
+              // Notify anyone with the tracking screen open (customer) and pull the
+              // request out of every matching SP's opportunities list — without this,
+              // both sides would only find out on their next poll.
+              try {
+                const fullBooking = await prisma.serviceRequest.findUnique({
+                  where: { id: request.id },
+                  include: {
+                    category: true,
+                    subCategory: true,
+                    location: true,
+                    customer: { include: { profile: true } },
+                    sp: { include: { profile: true, spProfile: true } }
+                  }
+                });
+                if (fullBooking) {
+                  const responseData = await enrichAndProcessBooking(fullBooking);
+                  broadcastBookingUpdate(request.id, responseData);
+                  notifyOpportunityRemoved(request.id, fullBooking.category?.name, fullBooking.subCategory?.name, null);
+                }
+              } catch (notifyError) {
+                console.error(`❌ [TIMEOUT SERVICE] Failed to broadcast timeout for ${request.id}:`, notifyError);
+              }
+            }
           } catch (innerError) {
             console.error(`❌ [TIMEOUT SERVICE] Failed to process ${request.id}:`, innerError);
           }
