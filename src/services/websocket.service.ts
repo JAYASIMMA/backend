@@ -2,37 +2,60 @@ import { Server as HTTPServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 
 // Map of bookingId to set of connected WebSocket clients
-const subscriptions = new Map<string, Set<WebSocket>>();
+const bookingSubscriptions = new Map<string, Set<WebSocket>>();
+
+// Map of userId to set of connected WebSocket clients
+const userSubscriptions = new Map<string, Set<WebSocket>>();
+
+// Set of all connected WebSocket clients
+const allClients = new Set<WebSocket>();
 
 export const initWebSocketServer = (server: HTTPServer) => {
   const wss = new WebSocketServer({ server });
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('[WEBSOCKET] Client connected.');
-    let subscribedBookingId: string | null = null;
+    allClients.add(ws);
+
+    let subscribedUserId: string | null = null;
+    const subscribedBookingIds = new Set<string>();
 
     ws.on('message', (message: string) => {
       try {
         const payload = JSON.parse(message);
         console.log('[WEBSOCKET] Received payload:', payload);
 
-        if (payload.type === 'SUBSCRIBE') {
+        if (payload.type === 'SUBSCRIBE_USER') {
+          const userId = payload.userId;
+          if (userId) {
+            if (subscribedUserId && userSubscriptions.has(subscribedUserId)) {
+              userSubscriptions.get(subscribedUserId)?.delete(ws);
+            }
+            subscribedUserId = userId;
+            if (!userSubscriptions.has(userId)) {
+              userSubscriptions.set(userId, new Set());
+            }
+            userSubscriptions.get(userId)?.add(ws);
+            console.log(`[WEBSOCKET] Client registered for user channel: ${userId}`);
+            ws.send(JSON.stringify({ type: 'SUBSCRIBED_USER', userId }));
+          }
+        } else if (payload.type === 'SUBSCRIBE') {
           const bookingId = payload.bookingId;
           if (bookingId) {
-            // Remove previous subscription if any
-            if (subscribedBookingId && subscriptions.has(subscribedBookingId)) {
-              subscriptions.get(subscribedBookingId)?.delete(ws);
+            subscribedBookingIds.add(bookingId);
+            if (!bookingSubscriptions.has(bookingId)) {
+              bookingSubscriptions.set(bookingId, new Set());
             }
-
-            subscribedBookingId = bookingId;
-            if (!subscriptions.has(bookingId)) {
-              subscriptions.set(bookingId, new Set());
-            }
-            subscriptions.get(bookingId)?.add(ws);
-            console.log(`[WEBSOCKET] Client subscribed to booking: ${bookingId}`);
-
-            // Send a confirmation acknowledgment
+            bookingSubscriptions.get(bookingId)?.add(ws);
+            console.log(`[WEBSOCKET] Client subscribed to booking channel: ${bookingId}`);
             ws.send(JSON.stringify({ type: 'SUBSCRIBED', bookingId }));
+          }
+        } else if (payload.type === 'UNSUBSCRIBE') {
+          const bookingId = payload.bookingId;
+          if (bookingId && bookingSubscriptions.has(bookingId)) {
+            bookingSubscriptions.get(bookingId)?.delete(ws);
+            subscribedBookingIds.delete(bookingId);
+            console.log(`[WEBSOCKET] Client unsubscribed from booking channel: ${bookingId}`);
           }
         }
       } catch (err) {
@@ -42,33 +65,102 @@ export const initWebSocketServer = (server: HTTPServer) => {
 
     ws.on('close', () => {
       console.log('[WEBSOCKET] Client disconnected.');
-      if (subscribedBookingId && subscriptions.has(subscribedBookingId)) {
-        subscriptions.get(subscribedBookingId)?.delete(ws);
-        if (subscriptions.get(subscribedBookingId)?.size === 0) {
-          subscriptions.delete(subscribedBookingId);
+      allClients.delete(ws);
+
+      if (subscribedUserId && userSubscriptions.has(subscribedUserId)) {
+        userSubscriptions.get(subscribedUserId)?.delete(ws);
+        if (userSubscriptions.get(subscribedUserId)?.size === 0) {
+          userSubscriptions.delete(subscribedUserId);
         }
       }
+
+      subscribedBookingIds.forEach((bId) => {
+        if (bookingSubscriptions.has(bId)) {
+          bookingSubscriptions.get(bId)?.delete(ws);
+          if (bookingSubscriptions.get(bId)?.size === 0) {
+            bookingSubscriptions.delete(bId);
+          }
+        }
+      });
     });
   });
 
   console.log('📡 [WEBSOCKET] Server initialized and attached to HTTP server');
 };
 
+/**
+ * Broadcast a newly created booking to all connected clients (e.g. Service Providers).
+ */
+export const broadcastNewBooking = (bookingData: any) => {
+  const payload = JSON.stringify({
+    type: 'NEW_BOOKING',
+    data: bookingData,
+  });
+
+  console.log(`[WEBSOCKET] Broadcasting NEW_BOOKING to ${allClients.size} connected clients.`);
+  allClients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
+};
+
+/**
+ * Broadcast a REMOVE_BROADCAST event when a job is accepted, cancelled, or timed out.
+ */
+export const broadcastRemoveBroadcast = (bookingId: string) => {
+  const payload = JSON.stringify({
+    type: 'REMOVE_BROADCAST',
+    bookingId,
+  });
+
+  console.log(`[WEBSOCKET] Broadcasting REMOVE_BROADCAST for booking: ${bookingId}`);
+  allClients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
+};
+
+/**
+ * Broadcast an updated booking to all subscribed clients (booking channel + user channels).
+ */
 export const broadcastBookingUpdate = (bookingId: string, bookingData: any) => {
-  const clients = subscriptions.get(bookingId);
-  if (clients && clients.size > 0) {
-    console.log(`[WEBSOCKET] Broadcasting update to ${clients.size} clients for booking: ${bookingId}`);
-    const payload = JSON.stringify({
-      type: 'BOOKING_UPDATE',
-      bookingId,
-      data: bookingData,
-    });
-    clients.forEach((client) => {
+  const payload = JSON.stringify({
+    type: 'BOOKING_UPDATE',
+    bookingId,
+    data: bookingData,
+  });
+
+  const targets = new Set<WebSocket>();
+
+  // Add all booking channel subscribers
+  const bookingSubscribers = bookingSubscriptions.get(bookingId);
+  if (bookingSubscribers) {
+    bookingSubscribers.forEach((ws) => targets.add(ws));
+  }
+
+  // Add customer user socket if connected
+  const customerId = bookingData.customerId;
+  if (customerId && userSubscriptions.has(customerId)) {
+    userSubscriptions.get(customerId)?.forEach((ws) => targets.add(ws));
+  }
+
+  // Add SP user socket if connected
+  const spId = bookingData.spId;
+  if (spId && userSubscriptions.has(spId)) {
+    userSubscriptions.get(spId)?.forEach((ws) => targets.add(ws));
+  }
+
+  if (targets.size > 0) {
+    console.log(`[WEBSOCKET] Broadcasting BOOKING_UPDATE to ${targets.size} clients for booking: ${bookingId}`);
+    targets.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(payload);
       }
     });
   } else {
-    console.log(`[WEBSOCKET] No active WebSocket clients subscribed to booking: ${bookingId}`);
+    console.log(`[WEBSOCKET] No active subscribers for booking update: ${bookingId}`);
   }
 };
+

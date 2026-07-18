@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 import * as admin from 'firebase-admin';
-import { broadcastBookingUpdate } from '../services/websocket.service';
+import { broadcastBookingUpdate, broadcastNewBooking, broadcastRemoveBroadcast } from '../services/websocket.service';
 
 /**
  * Send a high-priority data-only multicast push notification to workers (SPs).
@@ -63,7 +63,6 @@ const sendSinglePush = async (token: string, data: Record<string, string>) => {
   }
 };
 
-
 const enrichAndProcessBooking = async (b: any) => {
   if (!b) return null;
   let locationWithCoords = b.location;
@@ -110,7 +109,6 @@ const enrichAndProcessBooking = async (b: any) => {
     } : null
   };
 };
-
 
 export const createBooking = async (req: any, res: Response) => {
   let { categoryId, subCategoryId, locationId, messageText, audioMessageUrl, scheduledAt } = req.body;
@@ -211,6 +209,11 @@ export const createBooking = async (req: any, res: Response) => {
     // Sign the URL and enrich coordinates for the response
     const responseData = await enrichAndProcessBooking(booking);
 
+    // Broadcast new booking to all connected SP users via WebSocket
+    if (responseData) {
+      broadcastNewBooking(responseData);
+    }
+
     res.status(201).json({ success: true, data: responseData });
   } catch (error) {
     console.error(error);
@@ -245,7 +248,6 @@ export const getActiveBookings = async (req: any, res: Response) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Process URLs and fetch coordinates for each booking
     const processedBookings = await Promise.all(bookings.map(enrichAndProcessBooking));
 
     res.status(200).json({ success: true, data: processedBookings });
@@ -421,6 +423,11 @@ export const updateBookingStatus = async (req: any, res: Response) => {
     // Broadcast the update via WebSocket
     if (updatedBooking) {
       broadcastBookingUpdate(id, responseData);
+
+      const s = updatedBooking.status;
+      if (s === 'ACCEPTED' || s === 'CANCELLED' || s === 'TIMED_OUT') {
+        broadcastRemoveBroadcast(id);
+      }
     }
 
     // Send customer return push notification on worker actions
@@ -585,6 +592,7 @@ export const cancelBooking = async (req: any, res: Response) => {
       if (updatedBooking) {
         const responseData = await enrichAndProcessBooking(updatedBooking);
         broadcastBookingUpdate(id, responseData);
+        broadcastRemoveBroadcast(id);
       }
     } catch (err) {
       console.error('[CANCEL_BOOKING] WebSocket broadcast error:', err);
