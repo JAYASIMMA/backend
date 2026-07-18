@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { uploadFile, getSignedAssetUrl } from '../services/s3.service';
 import * as admin from 'firebase-admin';
@@ -152,8 +153,9 @@ export const createBooking = async (req: any, res: Response) => {
 
     console.log(`[CREATE BOOKING] Successfully created booking ID: ${booking.id}`);
 
-    // Dispatch FCM notifications to matched workers in the background
+    // Dispatch FCM notifications & WebSocket targeted messages to matched workers within 7km radius
     (async () => {
+      let eligibleSpUserIds: string[] = [];
       try {
         const category = await prisma.serviceCategory.findUnique({
           where: { id: categoryId }
@@ -166,54 +168,67 @@ export const createBooking = async (req: any, res: Response) => {
           const targetCategory = category.name.trim();
           const targetSubCategory = subCategory?.name?.trim();
 
-          const workers = await prisma.user.findMany({
-            where: {
-              role: 'SP',
-              fcmToken: { not: null },
-              spProfile: {
-                OR: [
-                  { categoryName: targetCategory },
-                  { subCategoryName: targetCategory },
-                  ...(targetSubCategory ? [
-                    { categoryName: targetSubCategory },
-                    { subCategoryName: targetSubCategory }
-                  ] : [])
-                ]
-              }
-            },
-            select: { fcmToken: true }
-          });
+          // Query matching workers who are within 7000 meters (7 km) of customer location AND match category
+          const eligibleWorkers: any[] = await prisma.$queryRaw`
+            SELECT 
+              u.id as "userId",
+              u."fcmToken"
+            FROM "User" u
+            JOIN "ServiceProviderProfile" sp ON u.id = sp."userId"
+            JOIN "Address" a ON a.id = ${locationId}
+            WHERE u.role = 'SP'
+              AND sp.latitude IS NOT NULL
+              AND sp.longitude IS NOT NULL
+              AND (
+                sp."categoryName" = ${targetCategory}
+                OR sp."subCategoryName" = ${targetCategory}
+                ${targetSubCategory ? Prisma.sql`OR sp."categoryName" = ${targetSubCategory} OR sp."subCategoryName" = ${targetSubCategory}` : Prisma.empty}
+              )
+              AND ST_DWithin(
+                a.coordinates::geography,
+                ST_SetSRID(ST_MakePoint(sp.longitude, sp.latitude), 4326)::geography,
+                7000
+              )
+          `;
 
-          const tokens = workers.map(w => w.fcmToken as string).filter(t => t !== '');
+          eligibleSpUserIds = eligibleWorkers.map((w: any) => w.userId);
+          const tokens = eligibleWorkers
+            .map((w: any) => w.fcmToken as string)
+            .filter((t: string) => t && t.trim() !== '');
+
+          console.log(`[SERVICE ROUTING] Found ${eligibleWorkers.length} matching SPs for "${targetCategory}" within 7km radius.`);
+
           if (tokens.length > 0) {
-            console.log(`[FCM] Found ${tokens.length} matching workers for category "${targetCategory}". Sending push notifications...`);
+            console.log(`[FCM] Sending push notifications to ${tokens.length} matching workers within 7km.`);
             const dataPayload = {
               click_action: 'FLUTTER_NOTIFICATION_CLICK',
               type: 'NEW_BOOKING',
               bookingId: booking.id,
               title: 'New Mission Request!',
-              body: `A new ${targetCategory}${targetSubCategory ? ` (${targetSubCategory})` : ''} mission is available near you.`,
+              body: `A new ${targetCategory}${targetSubCategory ? ` (${targetSubCategory})` : ''} mission is available within 7 km.`,
               categoryName: targetCategory,
               messageText: messageText || ''
             };
             await sendMulticastPush(tokens, dataPayload);
           } else {
-            console.log(`[FCM] No workers with active FCM tokens found for category "${targetCategory}".`);
+            console.log(`[FCM] No active workers found within 7km radius for category "${targetCategory}".`);
           }
         }
-      } catch (fcmErr: any) {
-        console.error('[FCM] Error processing worker broadcast pushes:', fcmErr);
+      } catch (routingErr: any) {
+        console.error('[SERVICE ROUTING] Error matching workers for push notification:', routingErr);
+      } finally {
+        // Sign the URL and enrich coordinates for response
+        const responseData = await enrichAndProcessBooking(booking);
+
+        // Targeted WebSocket Broadcast: Only to eligible SPs within 7km and matching service category
+        if (responseData) {
+          broadcastNewBooking(responseData, eligibleSpUserIds.length > 0 ? eligibleSpUserIds : []);
+        }
       }
     })();
 
-    // Sign the URL and enrich coordinates for the response
+    // Sign the URL and enrich coordinates for the immediate HTTP response
     const responseData = await enrichAndProcessBooking(booking);
-
-    // Broadcast new booking to all connected SP users via WebSocket
-    if (responseData) {
-      broadcastNewBooking(responseData);
-    }
-
     res.status(201).json({ success: true, data: responseData });
   } catch (error) {
     console.error(error);
@@ -289,7 +304,14 @@ export const updateBookingStatus = async (req: any, res: Response) => {
       ]);
       console.log(`[BOOKING] Mission ${id} TIMED_OUT by system/customer.`);
     } else if (req.role === 'SP') {
-      if (status === 'ACCEPTED' && booking.status === 'PENDING') {
+      if (status === 'ACCEPTED') {
+        if (booking.status !== 'PENDING') {
+          return res.status(400).json({
+            success: false,
+            message: 'This request has already been accepted by another service provider.'
+          });
+        }
+
         // Concurrency check: At most 5 accepted/active requests
         const activeCount = await prisma.serviceRequest.count({
           where: {

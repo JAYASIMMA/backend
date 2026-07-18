@@ -197,7 +197,8 @@ export const getBroadcasts = async (req: any, res: Response) => {
     // FORCE ALWAYS ONLINE: Ignoring dutyStatus check to ensure unlimited requests
     const dutyStatus = true;
     console.log(`[BROADCAST] SP ${userId} | Duty Status: ALWAYS ONLINE (Forced)`);
-    const radiusMeters = parseFloat(radius as string) || 500000; // Increased default to 500km for testing
+    const requestedRadius = parseFloat(radius as string);
+    const radiusMeters = (isNaN(requestedRadius) || requestedRadius <= 0) ? 7000 : Math.min(requestedRadius, 7000); // Strict 7km (7000m) radius cap
     
     const categoryName = spProfile?.categoryName?.trim();
     const subCategoryName = spProfile?.subCategoryName?.trim();

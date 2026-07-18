@@ -110,20 +110,37 @@ export const initWebSocketServer = (server: HTTPServer) => {
 };
 
 /**
- * Broadcast a newly created booking to all connected clients (e.g. Service Providers).
+ * Broadcast a newly created booking to targeted Service Providers (within 7km and matching service category).
  */
-export const broadcastNewBooking = (bookingData: any) => {
+export const broadcastNewBooking = (bookingData: any, targetUserIds?: string[]) => {
   const payload = JSON.stringify({
     type: 'NEW_BOOKING',
     data: bookingData,
   });
 
-  console.log(`[WEBSOCKET] Broadcasting NEW_BOOKING to ${allClients.size} connected clients.`);
-  allClients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
-  });
+  if (targetUserIds && targetUserIds.length > 0) {
+    console.log(`[WEBSOCKET] Broadcasting NEW_BOOKING to ${targetUserIds.length} targeted matching SP users.`);
+    targetUserIds.forEach((userId) => {
+      const userSockets = userSubscriptions.get(userId);
+      if (userSockets) {
+        userSockets.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+          }
+        });
+      }
+    });
+  } else if (targetUserIds === undefined) {
+    // Fallback broadcast to all connected clients if no target filter specified
+    console.log(`[WEBSOCKET] Broadcasting NEW_BOOKING to all ${allClients.size} connected clients.`);
+    allClients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    });
+  } else {
+    console.log(`[WEBSOCKET] No matching target SP users connected for NEW_BOOKING broadcast.`);
+  }
 };
 
 /**
