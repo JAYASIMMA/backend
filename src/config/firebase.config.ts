@@ -5,47 +5,69 @@ import fs from 'fs';
 
 dotenv.config();
 
-const serviceAccountPaths = [
-  path.join(process.cwd(), 'inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json'),
-  path.join(process.cwd(), 'backend', 'inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json'),
-  path.join(__dirname, '../../inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json'),
-  path.join(__dirname, '../../../inevit-c9786-firebase-adminsdk-fbsvc-083e168598.json')
-];
-
-let serviceAccountPath = '';
-for (const p of serviceAccountPaths) {
-  if (fs.existsSync(p)) {
-    serviceAccountPath = p;
-    break;
+function getFirebaseCredential(): admin.credential.Credential {
+  // 1. Check for full JSON string in ENV (FIREBASE_SERVICE_ACCOUNT_JSON)
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      console.log('Firebase: Initializing via FIREBASE_SERVICE_ACCOUNT_JSON environment variable.');
+      return admin.credential.cert(serviceAccount);
+    } catch (e) {
+      console.error('Firebase: Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON', e);
+    }
   }
+
+  // 2. Check for any service account JSON file on disk dynamically
+  const possibleDirs = [
+    process.cwd(),
+    path.join(process.cwd(), 'backend'),
+    __dirname,
+    path.join(__dirname, '../..'),
+    path.join(__dirname, '../../..'),
+  ];
+
+  for (const dir of possibleDirs) {
+    if (fs.existsSync(dir)) {
+      try {
+        const files = fs.readdirSync(dir);
+        const jsonFile = files.find(
+          (f) => f.includes('firebase-adminsdk') && f.endsWith('.json')
+        );
+        if (jsonFile) {
+          const fullPath = path.join(dir, jsonFile);
+          console.log(`Firebase: Initializing via service account JSON file: ${fullPath}`);
+          return admin.credential.cert(fullPath);
+        }
+      } catch (e) {
+        // Continue searching other dirs
+      }
+    }
+  }
+
+  // 3. Fallback to individual ENV variables
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+  if (projectId && clientEmail && privateKey) {
+    console.log('Firebase: Initializing via individual environment variables.');
+    privateKey = privateKey.trim().replace(/^["']|["']$/g, '').replace(/\\n/g, '\n');
+    return admin.credential.cert({
+      projectId,
+      clientEmail,
+      privateKey,
+    });
+  }
+
+  console.warn('Firebase Admin SDK: Incomplete configuration. Falling back to default credentials.');
+  return admin.credential.applicationDefault();
 }
 
-let credential;
-
-if (serviceAccountPath) {
-  console.log(`Firebase: Using service account JSON file at: ${serviceAccountPath}`);
-  credential = admin.credential.cert(serviceAccountPath);
-} else {
-  console.log('Firebase: Using environment variables.');
-  const firebaseConfig = {
-    project_id: process.env.FIREBASE_PROJECT_ID,
-    client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    private_key: process.env.FIREBASE_PRIVATE_KEY
-      ? process.env.FIREBASE_PRIVATE_KEY.trim().replace(/^["']|["']$/g, '').replace(/\\n/g, '\n')
-      : undefined,
-  };
-
-  if (!firebaseConfig.project_id || !firebaseConfig.client_email || !firebaseConfig.private_key) {
-    console.warn('Firebase Admin SDK: Incomplete configuration. Firebase Auth verification may fail.');
-    credential = admin.credential.applicationDefault(); // Fallback
-  } else {
-    credential = admin.credential.cert(firebaseConfig as admin.ServiceAccount);
-  }
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: getFirebaseCredential(),
+  });
 }
-
-admin.initializeApp({
-  credential,
-});
 
 export const auth = admin.auth();
 export default admin;
