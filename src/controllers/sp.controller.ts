@@ -180,13 +180,8 @@ export const getBroadcasts = async (req: any, res: Response) => {
         ['TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED'].includes(r.status)
     );
 
-    if (isPhysicallyWorking) {
-      console.log(`[BROADCAST] SP ${userId} is currently ON-SITE. Hiding new broadcasts.`);
-      return res.status(200).json({ success: true, data: [] });
-    }
-
-    if (activeRequests.length >= 5) {
-      console.log(`[BROADCAST] SP ${userId} reached MAX MISSIONS (5). Hiding new broadcasts.`);
+    if (isPhysicallyWorking || activeRequests.length >= 1) {
+      console.log(`[BROADCAST] SP ${userId} is currently handling an active mission. Hiding new broadcasts.`);
       return res.status(200).json({ success: true, data: [] });
     }
 

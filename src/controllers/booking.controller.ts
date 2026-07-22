@@ -189,6 +189,12 @@ export const createBooking = async (req: any, res: Response) => {
                 ST_SetSRID(ST_MakePoint(sp.longitude, sp.latitude), 4326)::geography,
                 3000
               )
+              -- Exclude SPs who ALREADY have an active mission in progress
+              AND NOT EXISTS (
+                SELECT 1 FROM "ServiceRequest" active_sr
+                WHERE active_sr."spId" = u.id
+                AND active_sr.status IN ('ACCEPTED', 'TEMP_WORK_STARTED', 'WORK_STARTED', 'TEMP_COMPLETED')
+              )
           `;
 
           eligibleSpUserIds = eligibleWorkers.map((w: any) => w.userId);
@@ -196,7 +202,7 @@ export const createBooking = async (req: any, res: Response) => {
             .map((w: any) => w.fcmToken as string)
             .filter((t: string) => t && t.trim() !== '');
 
-          console.log(`[SERVICE ROUTING] Found ${eligibleWorkers.length} matching SPs for "${targetCategory}" within 3km radius.`);
+          console.log(`[SERVICE ROUTING] Found ${eligibleWorkers.length} matching FREE SPs for "${targetCategory}" within 3km radius.`);
 
           if (tokens.length > 0) {
             console.log(`[FCM] Sending push notifications to ${tokens.length} matching workers within 3km.`);
@@ -211,7 +217,7 @@ export const createBooking = async (req: any, res: Response) => {
             };
             await sendMulticastPush(tokens, dataPayload);
           } else {
-            console.log(`[FCM] No active workers found within 3km radius for category "${targetCategory}".`);
+            console.log(`[FCM] No free active workers found within 3km radius for category "${targetCategory}".`);
           }
         }
       } catch (routingErr: any) {
@@ -220,7 +226,7 @@ export const createBooking = async (req: any, res: Response) => {
         // Sign the URL and enrich coordinates for response
         const responseData = await enrichAndProcessBooking(booking);
 
-        // Targeted WebSocket Broadcast: Only to eligible SPs within 7km and matching service category
+        // Targeted WebSocket Broadcast: Only to eligible SPs within 3km and matching service category
         if (responseData) {
           broadcastNewBooking(responseData, eligibleSpUserIds.length > 0 ? eligibleSpUserIds : []);
         }
@@ -312,7 +318,7 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           });
         }
 
-        // Concurrency check: At most 5 accepted/active requests
+        // Concurrency check: Strictly 1 active request at a time
         const activeCount = await prisma.serviceRequest.count({
           where: {
             spId: req.userId,
@@ -320,10 +326,10 @@ export const updateBookingStatus = async (req: any, res: Response) => {
           }
         });
 
-        if (activeCount >= 5) {
+        if (activeCount >= 1) {
           return res.status(400).json({
             success: false,
-            message: 'You cannot accept more than 5 active missions. Please complete current ones first.'
+            message: 'You already have an active mission in progress. Please complete your current mission first.'
           });
         }
 
