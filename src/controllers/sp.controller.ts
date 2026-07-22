@@ -198,12 +198,12 @@ export const getBroadcasts = async (req: any, res: Response) => {
     const dutyStatus = true;
     console.log(`[BROADCAST] SP ${userId} | Duty Status: ALWAYS ONLINE (Forced)`);
     const requestedRadius = parseFloat(radius as string);
-    const radiusMeters = (isNaN(requestedRadius) || requestedRadius <= 0) ? 7000 : Math.min(requestedRadius, 7000); // Strict 7km (7000m) radius cap
+    const radiusMeters = (isNaN(requestedRadius) || requestedRadius <= 0) ? 3000 : Math.min(requestedRadius, 3000); // Strict 3km (3000m) radius cap
     
     const categoryName = spProfile?.categoryName?.trim();
     const subCategoryName = spProfile?.subCategoryName?.trim();
     
-    console.log(`[BROADCAST] Filtering for: Category="${categoryName || 'All'}", SubCategory="${subCategoryName || 'All'}"`);
+    console.log(`[BROADCAST] Filtering for SP ${userId}: Category="${categoryName || 'None'}", SubCategory="${subCategoryName || 'None'}" within 3km`);
 
     // Construct query using Prisma.sql
     // We join both Category and SubCategory to ensure we match correctly
@@ -237,11 +237,11 @@ export const getBroadcasts = async (req: any, res: Response) => {
       )
       ${(categoryName || subCategoryName) ? Prisma.sql`
         AND (
-          ${categoryName ? Prisma.sql`(c.name = ${categoryName})` : Prisma.empty}
+          ${categoryName ? Prisma.sql`(LOWER(c.name) = LOWER(${categoryName}) OR LOWER(sc.name) = LOWER(${categoryName}))` : Prisma.empty}
           ${(categoryName && subCategoryName) ? Prisma.sql` OR ` : Prisma.empty}
-          ${subCategoryName ? Prisma.sql`(sc.name = ${subCategoryName} OR c.name = ${subCategoryName})` : Prisma.empty}
+          ${subCategoryName ? Prisma.sql`(LOWER(sc.name) = LOWER(${subCategoryName}) OR LOWER(c.name) = LOWER(${subCategoryName}))` : Prisma.empty}
         )
-      ` : Prisma.empty}
+      ` : Prisma.sql`AND 1=0`} -- If SP profile has no category configured, hide all requests
       ORDER BY distance_meters ASC
     `;
 

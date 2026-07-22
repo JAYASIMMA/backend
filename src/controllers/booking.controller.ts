@@ -168,7 +168,7 @@ export const createBooking = async (req: any, res: Response) => {
           const targetCategory = category.name.trim();
           const targetSubCategory = subCategory?.name?.trim();
 
-          // Query matching workers who are within 7000 meters (7 km) of customer location AND match category
+          // Query matching workers who are within 3000 meters (3 km) of customer location AND match category
           const eligibleWorkers: any[] = await prisma.$queryRaw`
             SELECT 
               u.id as "userId",
@@ -180,14 +180,14 @@ export const createBooking = async (req: any, res: Response) => {
               AND sp.latitude IS NOT NULL
               AND sp.longitude IS NOT NULL
               AND (
-                sp."categoryName" = ${targetCategory}
-                OR sp."subCategoryName" = ${targetCategory}
-                ${targetSubCategory ? Prisma.sql`OR sp."categoryName" = ${targetSubCategory} OR sp."subCategoryName" = ${targetSubCategory}` : Prisma.empty}
+                LOWER(sp."categoryName") = LOWER(${targetCategory})
+                OR LOWER(sp."subCategoryName") = LOWER(${targetCategory})
+                ${targetSubCategory ? Prisma.sql`OR LOWER(sp."categoryName") = LOWER(${targetSubCategory}) OR LOWER(sp."subCategoryName") = LOWER(${targetSubCategory})` : Prisma.empty}
               )
               AND ST_DWithin(
                 a.coordinates::geography,
                 ST_SetSRID(ST_MakePoint(sp.longitude, sp.latitude), 4326)::geography,
-                7000
+                3000
               )
           `;
 
@@ -196,22 +196,22 @@ export const createBooking = async (req: any, res: Response) => {
             .map((w: any) => w.fcmToken as string)
             .filter((t: string) => t && t.trim() !== '');
 
-          console.log(`[SERVICE ROUTING] Found ${eligibleWorkers.length} matching SPs for "${targetCategory}" within 7km radius.`);
+          console.log(`[SERVICE ROUTING] Found ${eligibleWorkers.length} matching SPs for "${targetCategory}" within 3km radius.`);
 
           if (tokens.length > 0) {
-            console.log(`[FCM] Sending push notifications to ${tokens.length} matching workers within 7km.`);
+            console.log(`[FCM] Sending push notifications to ${tokens.length} matching workers within 3km.`);
             const dataPayload = {
               click_action: 'FLUTTER_NOTIFICATION_CLICK',
               type: 'NEW_BOOKING',
               bookingId: booking.id,
               title: 'New Mission Request!',
-              body: `A new ${targetCategory}${targetSubCategory ? ` (${targetSubCategory})` : ''} mission is available within 7 km.`,
+              body: `A new ${targetCategory}${targetSubCategory ? ` (${targetSubCategory})` : ''} mission is available within 3 km.`,
               categoryName: targetCategory,
               messageText: messageText || ''
             };
             await sendMulticastPush(tokens, dataPayload);
           } else {
-            console.log(`[FCM] No active workers found within 7km radius for category "${targetCategory}".`);
+            console.log(`[FCM] No active workers found within 3km radius for category "${targetCategory}".`);
           }
         }
       } catch (routingErr: any) {
