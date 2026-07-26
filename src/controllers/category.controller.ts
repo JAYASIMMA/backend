@@ -289,9 +289,9 @@ export const getNearbySPs = async (req: Request, res: Response) => {
         FROM "User" u
         JOIN "Profile" p ON u.id = p."userId"
         JOIN "ServiceProviderProfile" sp ON u.id = sp."userId"
-        WHERE LOWER(sp."categoryName") = LOWER(${category.name})
+        WHERE (LOWER(sp."categoryName") = LOWER(${category.name}) OR LOWER(sp."subCategoryName") = LOWER(${category.name}))
         AND sp."dutyStatus" = true
-        AND sp."locationUpdatedAt" >= NOW() - INTERVAL '10 seconds'
+        AND sp."locationUpdatedAt" >= NOW() - INTERVAL '15 minutes'
         AND ST_DWithin(
           ST_SetSRID(ST_Point(sp.longitude, sp.latitude), 4326)::geography,
           ST_SetSRID(ST_Point(${longitude}, ${latitude}), 4326)::geography,
@@ -305,9 +305,12 @@ export const getNearbySPs = async (req: Request, res: Response) => {
         where: {
           role: 'SP',
           spProfile: {
-            categoryName: { equals: category.name, mode: 'insensitive' },
+            OR: [
+              { categoryName: { equals: category.name, mode: 'insensitive' } },
+              { subCategoryName: { equals: category.name, mode: 'insensitive' } }
+            ],
             dutyStatus: true,
-            locationUpdatedAt: { gte: new Date(Date.now() - 10000) } // 15 minutes online window
+            locationUpdatedAt: { gte: new Date(Date.now() - 15 * 60 * 1000) } // 15 minutes online window
           }
         },
         include: {
