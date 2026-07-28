@@ -9,6 +9,7 @@ import * as adminController from '../controllers/admin.controller';
 import * as customerController from '../controllers/customer.controller';
 import * as chatController from '../controllers/chat.controller';
 import * as healthController from '../controllers/health.controller';
+import * as feedbackController from '../controllers/feedback.controller';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 import { upload } from '../middleware/upload.middleware';
 
@@ -26,6 +27,8 @@ router.post('/auth/fcm-token', authenticate, authController.saveFcmToken);
 // Public Passport View (Global)
 router.get('/public/passport/:id', spController.getPublicPassport);
 router.get('/sp/:id/feedbacks', spController.getSPFeedbacks);
+router.post('/feedback', feedbackController.sendFeedbackEmail);
+router.post('/feedback/send-email', feedbackController.sendFeedbackEmail);
 
 // Diagnostic Routes
 router.get('/health', (req, res) => res.status(200).json({ status: 'OK' }));
