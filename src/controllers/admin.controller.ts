@@ -109,27 +109,44 @@ export const getSPs = async (req: Request, res: Response) => {
       _avg: { rating: true },
     });
 
+    const spUserIds = sps.map(sp => sp.id);
+    const spProfileIds = sps.map(sp => sp.spProfile?.id).filter(Boolean) as string[];
+    const allSpIds = Array.from(new Set([...spUserIds, ...spProfileIds]));
+
     // Use a map for O(1) lookup
     const requestsWithFeedback = await prisma.serviceRequest.findMany({
-        where: { spId: { in: sps.map(sp => sp.id) } },
-        select: { id: true, spId: true, feedback: { select: { rating: true } } }
+        where: { spId: { in: allSpIds } },
+        select: { id: true, spId: true, status: true, feedback: { select: { rating: true } } }
     });
 
     const spStatsMap: any = {};
     requestsWithFeedback.forEach(r => {
         if (!r.spId) return;
-        if (!spStatsMap[r.spId]) spStatsMap[r.spId] = { sum: 0, count: 0 };
+        if (!spStatsMap[r.spId]) spStatsMap[r.spId] = { sum: 0, count: 0, completedJobs: 0, totalJobs: 0 };
+        spStatsMap[r.spId].totalJobs += 1;
         if (r.feedback) {
             spStatsMap[r.spId].sum += r.feedback.rating;
             spStatsMap[r.spId].count += 1;
+        }
+        if (r.status === 'COMPLETED') {
+            spStatsMap[r.spId].completedJobs += 1;
         }
     });
 
     // 2. Batch process S3 signing (only for what's visible or useful)
     const enrichedSPs = await Promise.all(sps.map(async (sp: any) => {
-        const stats = spStatsMap[sp.id] || { sum: 0, count: 0 };
-        sp.rating = stats.count > 0 ? Number((stats.sum / stats.count).toFixed(1)) : 0;
-        sp.feedbackCount = stats.count;
+        const userStats = spStatsMap[sp.id] || { sum: 0, count: 0, completedJobs: 0, totalJobs: 0 };
+        const profileStats = (sp.spProfile?.id && spStatsMap[sp.spProfile.id]) || { sum: 0, count: 0, completedJobs: 0, totalJobs: 0 };
+
+        const totalSum = userStats.sum + profileStats.sum;
+        const totalRatingCount = userStats.count + profileStats.count;
+        const totalJobs = userStats.totalJobs + profileStats.totalJobs;
+        const completedJobs = userStats.completedJobs + profileStats.completedJobs;
+
+        sp.rating = totalRatingCount > 0 ? Number((totalSum / totalRatingCount).toFixed(1)) : 0;
+        sp.feedbackCount = totalRatingCount;
+        sp.completedJobs = completedJobs;
+        sp.totalJobs = totalJobs;
 
         if (sp.profile?.profilePictureUrl) {
             sp.profile.profilePictureUrl = await getSignedAssetUrl(sp.profile.profilePictureUrl);
@@ -154,18 +171,10 @@ export const getAllRequests = async (req: Request, res: Response) => {
     const requests = await prisma.serviceRequest.findMany({
       include: {
         customer: { include: { profile: true } },
-        sp: { include: { profile: true } },
+        sp: { include: { profile: true, spProfile: true } },
         category: true,
         subCategory: true,
-        location: {
-          select: {
-            id: true,
-            addressLine: true,
-            city: true,
-            pincode: true,
-            label: true
-          }
-        },
+        location: true,
         feedback: true
       },
       orderBy: { createdAt: 'desc' }
@@ -368,13 +377,102 @@ export const updateRequestStatus = async (req: Request, res: Response) => {
 export const getAudits = async (req: Request, res: Response) => {
   try {
     const feedbacks = await prisma.feedback.findMany({
-      include: { request: { include: { customer: true, sp: true } } }
+      include: { 
+        request: { 
+          include: { 
+            customer: { include: { profile: true } }, 
+            sp: { include: { profile: true, spProfile: true } },
+            category: true,
+            subCategory: true
+          } 
+        } 
+      },
+      orderBy: { createdAt: 'desc' }
     });
+
     const cancellations = await prisma.requestCancellationReason.findMany({
-      include: { request: true, customer: true, sp: true }
+      include: { 
+        request: { 
+          include: { 
+            customer: { include: { profile: true } }, 
+            sp: { include: { profile: true, spProfile: true } }, 
+            category: true, 
+            subCategory: true 
+          } 
+        }, 
+        customer: { include: { profile: true } }, 
+        sp: { include: { profile: true, spProfile: true } } 
+      },
+      orderBy: { createdAt: 'desc' }
     });
-    res.status(200).json({ success: true, data: { feedbacks, cancellations } });
+
+    // Lookup map of all users to ensure 100% name resolution
+    const allUsers = await prisma.user.findMany({
+      include: { profile: true, spProfile: true }
+    });
+
+    const userMap = new Map<string, any>();
+    allUsers.forEach((u: any) => {
+      if (u.id) userMap.set(u.id, u);
+      if (u.mobile) userMap.set(u.mobile, u);
+    });
+
+    const resolveCustName = (custObj: any, customerId?: string) => {
+      if (custObj?.profile?.fullName?.trim()) return custObj.profile.fullName.trim();
+      if (customerId && userMap.has(customerId)) {
+        const u = userMap.get(customerId);
+        if (u?.profile?.fullName?.trim()) return u.profile.fullName.trim();
+      }
+      return 'Customer';
+    };
+
+    const resolveSpName = (spObj: any, spId?: string, catName?: string) => {
+      if (spObj?.profile?.fullName?.trim()) return spObj.profile.fullName.trim();
+      if (spId && userMap.has(spId)) {
+        const u = userMap.get(spId);
+        if (u?.profile?.fullName?.trim()) return u.profile.fullName.trim();
+        if (u?.spProfile?.categoryName) return `${u.spProfile.categoryName} Partner`;
+      }
+      if (spObj?.spProfile?.categoryName) return `${spObj.spProfile.categoryName} Partner`;
+      if (catName) return `${catName} Professional`;
+      return 'Service Partner';
+    };
+
+    const enrichedFeedbacks = await Promise.all(feedbacks.map(async (f: any) => {
+      const cust = f.request?.customer || f.customer;
+      const sp = f.request?.sp || f.sp;
+
+      f.customerName = resolveCustName(cust, f.request?.customerId);
+      f.merchantName = resolveSpName(sp, f.request?.spId, f.request?.category?.name);
+
+      if (f.request?.customer?.profile?.profilePictureUrl) {
+        f.request.customer.profile.profilePictureUrl = await getSignedAssetUrl(f.request.customer.profile.profilePictureUrl);
+      }
+      if (f.request?.sp?.profile?.profilePictureUrl) {
+        f.request.sp.profile.profilePictureUrl = await getSignedAssetUrl(f.request.sp.profile.profilePictureUrl);
+      }
+      return f;
+    }));
+
+    const enrichedCancellations = await Promise.all(cancellations.map(async (c: any) => {
+      const cust = c.customer || c.request?.customer;
+      const sp = c.sp || c.request?.sp;
+
+      c.customerName = resolveCustName(cust, c.customerId || c.request?.customerId);
+      c.merchantName = resolveSpName(sp, c.spId || c.request?.spId, c.request?.category?.name);
+
+      if (cust?.profile?.profilePictureUrl) {
+        cust.profile.profilePictureUrl = await getSignedAssetUrl(cust.profile.profilePictureUrl);
+      }
+      if (sp?.profile?.profilePictureUrl) {
+        sp.profile.profilePictureUrl = await getSignedAssetUrl(sp.profile.profilePictureUrl);
+      }
+      return c;
+    }));
+
+    res.status(200).json({ success: true, data: { feedbacks: enrichedFeedbacks, cancellations: enrichedCancellations } });
   } catch (error) {
+    console.error('getAudits error:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
@@ -640,10 +738,21 @@ export const getAdmins = async (req: Request, res: Response) => {
     }
 };
 
+const formatMobileNumber = (m: string) => {
+    if (!m) return m;
+    let trimmed = m.trim();
+    if (trimmed.startsWith('+')) return trimmed;
+    const digits = trimmed.replace(/\D/g, '');
+    if (digits.length === 10) return `+91${digits}`;
+    if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
+    return `+${digits}`;
+};
+
 export const createAdmin = async (req: Request, res: Response) => {
     const { fullName, mobile, password, profilePictureUrl } = req.body;
     try {
-        const existingUser = await prisma.user.findUnique({ where: { mobile } });
+        const formattedMobile = formatMobileNumber(mobile);
+        const existingUser = await prisma.user.findUnique({ where: { mobile: formattedMobile } });
         if (existingUser) {
             return res.status(400).json({ success: false, message: 'Administrator with this mobile already exists' });
         }
@@ -651,7 +760,7 @@ export const createAdmin = async (req: Request, res: Response) => {
         const passwordHash = await bcrypt.hash(password, 10);
         const user = await prisma.user.create({
             data: {
-                mobile,
+                mobile: formattedMobile,
                 passwordHash,
                 role: 'ADMIN',
             }
@@ -678,11 +787,12 @@ export const updateAdmin = async (req: Request, res: Response) => {
     try {
         const userData: any = {};
         if (mobile) {
-            const existingUser = await prisma.user.findUnique({ where: { mobile } });
+            const formattedMobile = formatMobileNumber(mobile);
+            const existingUser = await prisma.user.findUnique({ where: { mobile: formattedMobile } });
             if (existingUser && existingUser.id !== id) {
                 return res.status(400).json({ success: false, message: 'Mobile number already in use' });
             }
-            userData.mobile = mobile;
+            userData.mobile = formattedMobile;
         }
         if (password) {
             userData.passwordHash = await bcrypt.hash(password, 10);
@@ -714,6 +824,21 @@ export const updateAdmin = async (req: Request, res: Response) => {
     }
 };
 
+const executeWithRetry = async (fn: () => Promise<any>, retries = 3, delayMs = 1000) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if ((err.code === 'P1001' || err.message?.includes("Can't reach database server")) && i < retries - 1) {
+        console.warn(`[DB Connection Retry] Attempt ${i + 1} failed. Retrying in ${delayMs}ms...`);
+        await new Promise(res => setTimeout(res, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+};
+
 export const deleteAdmin = async (req: any, res: Response) => {
     const { id } = req.params;
     const adminId = req.userId; // Current logged in admin
@@ -723,11 +848,15 @@ export const deleteAdmin = async (req: any, res: Response) => {
     }
 
     try {
-        await prisma.user.delete({ where: { id } });
+        await executeWithRetry(async () => {
+            // Delete profile records first, then delete user
+            await prisma.profile.deleteMany({ where: { userId: id } });
+            await prisma.user.delete({ where: { id } });
+        });
         res.status(200).json({ success: true, message: 'Administrator account terminated successfully' });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Delete Admin Error:', error);
-        res.status(500).json({ success: false, message: 'Failed to delete administrator' });
+        res.status(500).json({ success: false, message: error.message || 'Failed to delete administrator' });
     }
 };
 
